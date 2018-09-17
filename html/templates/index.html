@@ -1,0 +1,140 @@
+<!--
+  Copyright 2018 Google LLC
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+{% import 'macros.html' as macros %}
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="">
+  <meta name="author" content="">
+
+  <title>TPM-JS</title>
+  <link rel="icon" type="image/png" href="images/favicon.ico" />
+
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css"
+    integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u"
+    crossorigin="anonymous" />
+
+  <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/bootstrap-table/1.12.1/bootstrap-table.min.css"
+    crossorigin="anonymous" />
+  <link rel="stylesheet" href="css/main.css" />
+
+
+  <!-- Javascript -->
+  <script type="text/javascript" src="https://code.jquery.com/jquery-3.3.1.min.js"
+    integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+  <script type="text/javascript" src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"
+    integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa"
+    crossorigin="anonymous"></script>
+  <script src="//cdnjs.cloudflare.com/ajax/libs/bootstrap-table/1.12.1/bootstrap-table.min.js"
+    crossorigin="anonymous"></script>
+  <script src="https://cdn.rawgit.com/google/code-prettify/master/loader/run_prettify.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.9.1/underscore-min.js" integrity="sha256-G7A4JrJjJlFqP0yamznwPjAApIKPkadeHfyIwiaa9e0=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/sjcl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/bn.js" integrity="sha256-3sG2Ebk/cRSft/ho8BwOMhz7F6v93VWHfmSWlLWlTCA=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/sha256.js" integrity="sha256-wT4mQyiVx0+K4Zf04YESH4U2O5OooLOp4aCYlpeQxEI=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/ecc.js" integrity="sha256-zClRcOVvsyJAAC/TZ7juVln1hrTicUl3HnOH6xKiUWk=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/node-forge@0.7.5/dist/forge.all.min.js" integrity="sha256-tTxeWljNYMd8KHKLWEb7dGkjyjLd33mo23ecfm8nckM=" crossorigin="anonymous"></script>
+
+
+  <script>
+    var Module = {
+      locateFile: function(url)
+      {
+        return "wasm/" + url;
+      }
+    };
+  </script>
+  <script type="text/javascript" src="wasm/bindings.js"></script>
+  <script type="text/javascript" src="js/consts.js"></script>
+  <script type="text/javascript" src="js/main.js"></script>
+</head>
+
+<body>
+  <!-- Top navbar -->
+  <nav class="navbar navbar-inverse navbar-default navbar-fixed-top">
+    <div class="container">
+      <div class="navbar-header">
+        <a class="navbar-brand" href="index.html">TPM-JS</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container-fluid">
+    <div class="row">
+      {% set pages = [
+        ("welcome.html", "Welcome", "pg_welcome"),
+        ("introduction.html", "Introduction", "pg_introduction"),
+        ("properties.html", "Properties", "pg_properties"),
+        ("random.html", "Random", "pg_random"),
+        ("keys.html", "Keys", "pg_keys"),
+        ("certificates.html", "Certificates", "pg_certificates"),
+        ("ownership.html", "Ownership", "pg_ownership"),
+        ("pcrs.html", "PCRs", "pg_pcrs"),
+        ("attestation.html", "Attestation", "pg_attestation"),
+        ("authorization.html", "Authorization", "pg_authorization"),
+        ("sealing.html", "Sealing", "pg_sealing"),
+        ("glossary.html", "Glossary", "pg_glossary"),
+        ("reading.html", "Reading", "pg_reading"),
+        ] -%}
+
+      <!-- Sidebar -->
+      <div class="col-md-1 sidebar">
+        <ul class="nav nav-sidebar">
+          {% for fname, title, id in pages %}
+          <li id="side_{{id}}" {% if loop.first %} class="active" {% endif %}>
+            <a href="#{{id}}" data-value="{{id}}">{{ title|e }}</a>
+          </li>
+          {% endfor %}
+      </div>
+
+      <!-- Page -->
+      <div class="col-md-6">
+        {% for fname, title, id in pages %}
+        <div id={{ id }}
+             class="page"
+             {% if not loop.first %} style="display: none;"{% endif %}>
+          {% include fname %}
+          <nav>
+            <ul class="pager">
+              {% if not loop.first %}
+              <li><a href="#{{ pages[loop.index0-1][2] }}" data-value="{{ pages[loop.index0-1][2] }}">Previous</a></li>
+              {% endif %} {% if not loop.last %}
+              <li><a href="#{{ pages[loop.index0+1][2] }}" data-value="{{ pages[loop.index0+1][2] }}">Next</a></li>
+              {% endif %}
+            </ul>
+          </nav>
+        </div>
+        {% endfor %}
+      </div>
+
+      <!-- Simulator window -->
+      <div class="col-md-5">
+        <!-- affix sets position to fixed. width 40% is the column width (5) divided by the
+             total number of row columns (12) -->
+        <div class="simulator_window affix" style="width: 40%">
+          {% include "simulator_window.html" %}
+        </div>
+
+      </div>
+    </div>
+</body>
+
+</html>

@@ -1,0 +1,588 @@
+<h2>Cryptographic Keys</h2>
+
+<p>
+  TPM generates <b>strong</b>, <b>secure</b> cryptographic keys. Strong in the
+  sense that the key is derived from true random source and large key space. In
+  case of 3DES, TPM also checks that keys are not known weak keys. Secure in the
+  sense that the private key material never leaves the TPM secure boundary in plain
+  form. When a key leaves the TPM - in order to be loaded and used later - it is
+  <b>wrapped</b> (<b>encrypted</b>) by its parent key.
+  <br> Keys, therefore, form a <b>tree</b>: each key is wrapped by its parent,
+  all the way to the root of the tree, where the <b>primary key</b> is derived
+  from a fixed <b>seed</b>. The seed is stored in the TPM's NVDATA, under a reserved
+  index, and cannot be read externally.
+</p>
+
+<p>
+  <img src="images/key_tree.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Key Tree">
+</p>
+
+<h3>Key Hierarchies</h3>
+<p>
+  The TPM stores keys on one of four hierarchies:
+  <ol>
+    <li>Endorsement hierarchy.</li>
+    <li>Platform hierarchy.</li>
+    <li>Owner hierarchy, also known as storage hierarchy.</li>
+    <li>Null hierarchy.</li>
+  </ol>
+  A hierarchy is a logical collection of entities: keys and nv data blobs. Each hierarchy
+  has a <b>different seed</b> and <b>different authorization policy</b>. Hierarchies differ
+  by when their seeds are created and by who certifies their primary keys.
+  <br> Generally speaking, the endorsement hierarchy is reserved for objects created
+  and certified by the TPM manufacturer. The endorsement seed (eseed) is randomly
+  generated at manufacturing time and never changes during the lifetime of the
+  device. The primary endorsement key is certified by the TPM manufacturer, and
+  because its seed never changes, it can be used to identify the device. Since
+  there's only one TPM device per machine, the primary endorsement key can also
+  be used as the machine's identity.
+  <br> The platform hierarchy is reserved for objects created and certified by
+  the OEM that builds the host platform. The platform seed (pseed) is randomly
+  generated at manufacturing time, but can be changed by the OEM by calling <code>TPM2_CC_ChangePPS</code>.
+  <br> The owner hierarchy is reserved for us - the primary users of the TPM. When
+  a user takes ownership, for example, when the IT department provisions a new
+  host on the network, the owner hierarchy is reset. This is done by calling
+  <code>TPM2_CC_Clear</code>. In this critical setup step, two user keys should
+  be provisioned and certified by the owner: these form the root of trust for all
+  the keys generated on the owner hierarchy.
+  <br> The null hierarchy is reserved for ephemeral keys. The null seed is re-generated
+  each time the host reboots.
+</p>
+
+<p>
+  Let's see this in action. First, open the <i>Seeds window</i> by either clicking on
+  the <i>View</i> menu on the right, or by running the next snippet.
+  <br> {{ macros.code_cell(input="  ShowSeedsWindow(); ") }}
+
+  <br><div class="alert alert-info" role="alert">We use our direct access to the simulator in order to read the secret seed values.
+  Users cannot read these secrets in a normal setting.</div>
+
+  <br> Note the seed values. We simulate a host reset (power-off, power-on cycle) in the next snippet.
+  Note how the null seed is re-generated.
+  <br> {{ macros.code_cell(input="
+  var before = sim.GetNullSeed();
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+  var after = sim.GetNullSeed();
+  assert(_.isEqual(before, after) == false, 'nseed reset on reboot');
+  print('OK');
+  ") }}
+</p>
+
+<p>
+  We clear the owner hierarchy in the next snippet. Note how the owner seed is re-generated.
+  <br> {{ macros.code_cell(input="
+  var before = sim.GetOwnerSeed();
+  app.Clear();
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+  var after = sim.GetOwnerSeed();
+  assert(_.isEqual(before, after) == false, 'oseed reset on clear');
+  print('OK');
+  ") }}
+  <br> Again, <code>TPM2_CC_Clear</code> should only be called when the user takes ownership of the TPM.
+</p>
+
+<p>
+  Finally, we simulate a manufacturer reset. Note how all the seeds are re-created.
+  <br> {{ macros.code_cell(input="
+  var before = sim.GetEndorsementSeed();
+  sim.PowerOff();
+  sim.PowerOn();
+  sim.ManufactureReset();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+  var after = sim.GetEndorsementSeed();
+  assert(_.isEqual(before, after) == false, 'eseed reset on clear');
+  print('OK');
+  ") }}
+  <br> A manufacturer reset cannot be triggered by the user. Here we use our direct
+  access to the simulator in order to invoke this function.
+</p>
+
+<h3>Primary Keys</h3>
+<p>
+  As mentioned, primary keys are derived from the primary seeds using a deterministic
+  key derivation function (KDF). More accurately, the KDF takes as input the fixed
+  seed and the key's template that describes its properties.
+</p>
+
+<p>
+  <img src="images/kdf.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="KDF">
+  <br>
+  <div class="alert alert-info" role="alert">If either the seed or the template changes, a completely different primary key
+    is created</div>
+</p>
+
+<p>
+  The template is defined in the <code>TPM2B_PUBLIC</code> structure. Important
+  fields include the <i>type</i> that describes whether this is a symmetric or
+  asymmetric key, the <i>objectAttributes</i> that describes whether the key is
+  used for encryption or signing, the <i>parameters</i> that describes the key
+  size and <i>unique</i> that is used as an entropy value.
+  <br>
+  <div class="alert alert-info" role="alert">By changing the entropy field, 
+    the TPM can generate an unlimited number of primary
+    keys of a given type (say RSA-2048).</div>
+</p>
+
+<p>
+  A primary key is created with the <code>TPM2_CC_CreatePrimary</code> command.
+  Let's create a RSA-2048 key on the OWNER hierarchy:
+
+  <br> {{ macros.code_cell(input="
+  app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');")}}
+
+  <br>
+  <div class="alert alert-info" role="alert">TPM2_CC_CreatePrimary creates and <b>loads</b> the key to the TPM: note how the
+  object's handle is returned. The TPM can hold only a limited number (3) of objects
+  at a time. Use <code>TPM2_CC_FlushContext</code> to unload an object.</div>
+
+  <br> {{ macros.code_cell(input="
+  // Create primary key.
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');
+  assert(pk1.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Unload primary key.
+  assert(app.FlushContext(pk1.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Create primary key with the same template. The same key is created.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');
+  assert(pk2.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Compare public key material.
+  assert(_.isEqual(pk1.rsa_public_n, pk2.rsa_public_n) == true, 'Keys should match');
+
+  // Unload primary key.
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  print('OK');
+  ")}}
+
+  <br> Instead of comparing the public key material (rsa_public_n which is copied
+  from out_public.publicArea.unique.rsa.buffer), we should instead compare the key's
+  name. The name, defined in <code>TPM2B_NAME</code> structure is the hash of the
+  canonical form of TPM2B_PUBLIC that describes the key's attributes, parameters
+  and public key material.
+
+  <br> {{ macros.code_cell(input="
+  // Create primary key.
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');
+  assert(pk1.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Unload primary key.
+  assert(app.FlushContext(pk1.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Create primary key with the same template. The same key is created.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');
+  assert(pk2.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Compare names.
+  assert(_.isEqual(pk1.name, pk2.name) == true, 'Keys should match');
+
+  // Unload primary key.
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  print('OK');
+  ")}}
+
+  <br>
+  <div class="alert alert-info" role="alert">The name is the key's fingerprint</div>
+
+  <br>
+  The owner's seed doesn't change after a host restart, therefore, the primary key doesn't change after a restart:
+
+  <br> {{ macros.code_cell(input="
+  // Create primary key.
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');
+  assert(pk1.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Restart host.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Create primary key with the same template. The same key is created.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'hello');
+  assert(pk2.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Compare names.
+  assert(_.isEqual(pk1.name, pk2.name) == true, 'Keys should match');
+
+  // Unload primary key.
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  print('OK');
+  ")}}
+</p>
+
+<p>
+   Let's see how different keys are created if different template entropy values are used:
+
+  <br> {{ macros.code_cell(input="
+  // Create keys with different entropy values.
+  var entropy1 = 'hello';
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, entropy1);
+  assert(pk1.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  var entropy2 = 'world';
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, entropy2);
+  assert(pk2.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Unload keys
+  assert(app.FlushContext(pk1.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Compare keys.
+  assert(_.isEqual(pk1.name, pk2.name) == false, 'Keys should be different');
+
+  print('OK');
+  ")}}
+</p>
+
+<p>
+   Finally, let's see how different keys are created if different seed values are used. We'll use the null hierarchy for this experiment. We'll reboot the host platform between key creation:
+
+  <br> {{ macros.code_cell(input="
+  // Create keys with different seed values. This shows that null hierarchy stores ephemeral keys.
+  var pk1 = app.CreatePrimary(TPM2_RH_NULL, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(pk1.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Restart host. The null seed is re-generated.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  var pk2 = app.CreatePrimary(TPM2_RH_NULL, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(pk2.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Compare keys.
+  assert(_.isEqual(pk1.name, pk2.name) == false, 'Keys should be different');
+
+  print('OK');
+  ")}}
+</p>
+
+<h3>Object Attributes</h3>
+
+<p>
+  Object attributes bitmap field is part of <code>TPM2B_PUBLIC</code>. For our
+  experiments it's important to understand the following attributes:
+  <ul>
+    <li>Decrypt (<i>TPMA_OBJECT_DECRYPT</i>). Specifies an encryption key.</li>
+    <li>Sign (<i>TPMA_OBJECT_SIGN_ENCRYPT</i>). Specifies a signing key.</li>
+    <li>Restricted (<i>TPMA_OBJECT_RESTRICTED</i>). Restricts the key to signing/encrypting
+      only internal TPM data.</li>
+  </ul>
+
+  A hierarchy can be thought of as having parent and child keys. Parent keys protect
+  its children, offering secrecy and integrity when the child key is stored outside
+  the TPM. Keys that wrap other keys are also called <em>storage keys</em>. Storage
+  keys are restricted encryption keys. They cannot be used for general decryption,
+  which could then leak the child's secrets.
+
+  <br> The ultimate parent at the top of the hierarchy is a primary key. Children
+  can be storage keys, in which case they can also be parents. Children can also
+  be non-storage keys, in which case they're leaf keys: children but never parents.
+
+  <br> {{ macros.code_cell(input="
+  // A key must be either an encryption or a signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/0);
+  assert(key.rc == TPM2_RC_P + TPM2_RC_2 + TPM2_RC_ATTRIBUTES, 'CreatePrimary expected to fail');
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/0);
+  assert(key.rc == TPM2_RC_P + TPM2_RC_2 + TPM2_RC_ATTRIBUTES, 'CreatePrimary expected to fail');
+
+  // A restricted key cannot be used for both encryption and signing.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_P + TPM2_RC_2 + TPM2_RC_ATTRIBUTES, 'CreatePrimary expected to fail');
+
+  // A storage key is a restricted encryption key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Restricted signing keys are used for PCR quotes and key certificates.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // General purpose RSA signing key. This is a leaf-key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // General purpose ECC signing key. This is a leaf-key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // General purpose symmetric key for encryption/decryption. This is a leaf-key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_SYMCIPHER,/*restricted=*/0, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+</p>
+
+<h3>Child Keys</h3>
+
+<p>
+  Non primary keys are created with the <code>TPM2_CC_Create</code> command. The command
+  takes as input a handle to the parent key, and the key's TPM2B_PUBLIC template.
+
+
+  <br> {{ macros.code_cell(input="
+  pk = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'');
+  key = app.Create(pk.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, 'Create failed');
+  assert(_.isEqual(key.parent_name, pk.name) == true, 'Parent name should match');
+
+  print('tpm2b_private: ', StdVectorToByteArray(key.tpm2b_private));
+  print('tpm2b_public: ', StdVectorToByteArray(key.tpm2b_public));
+  ")}}
+
+  <br>
+  <div class="alert alert-info" role="alert">TPM2_CC_Create creates but doesn't load the key onto the TPM.
+    The command returns <code>TPM2B_PRIVATE</code> which is the key material wrapped (encrypted) by the
+    parent key. Use <code>TPM2_CC_Load</code> to load the key onto the TPM.</div>
+
+  <br> {{ macros.code_cell(input="
+  // Loading a key under the same parent succeeds.
+  var loaded_key = app.Load(pk.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, 'Load failed');
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Loading a key under a different parent fails with TPM2_RC_INTEGRITY.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'different');
+  var loaded2 = app.Load(pk2.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded2.rc == TPM2_RC_P + TPM2_RC_1 + TPM2_RC_INTEGRITY, 'Load expected to fail');
+
+  print('OK');
+  ")}}
+
+  <br> TPM supports additional commands to create new keys: <code>TPM2_CC_CreateLoaded</code>,
+  <code>TPM2_CC_LoadExternal</code> and <code>TPM2_CC_Import</code>. We will not
+  cover them here.
+</p>
+
+<h3>Using Keys</h3>
+
+<p>
+  Now that we know how to create keys, we can use them to perform cryptographic operations like encryption and signing.
+  <br> The following snippet shows how to use a non-restricted, symmetric encryption key.
+  It uses the <code>TPMT2_CC_EncryptDecrypt</code> command.
+
+  <br> {{ macros.code_cell(input="
+  // Create a symmetric encryption key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_SYMCIPHER,/*restricted=*/0, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Encrypt and decrypt a message.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.Encrypt(key.handle, message);
+  var decrypted = app.Decrypt(key.handle, encrypted);
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('Encrypted:', encrypted);
+  print('Decrypted:', decrypted);
+  print('Original :', message);
+
+  assert(_.isEqual(message, decrypted) == true, 'Message recovered');
+
+  print('OK');
+  ")}}
+
+  <br> The following snippet shows how to use an asymmetric key for signing and verification.
+  It uses <code>TPMT2_CC_Sign</code> and <code>TPM2_CC_VerifySignature</code> commands.
+
+  <br> {{ macros.code_cell(input="
+  // Create an asymmetric ECC signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Sign the digest of the message 'Hello'.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_ECC, 'Hello');
+  assert(sign_result.rc == TPM2_RC_SUCCESS, 'Sign failed');
+
+  // Signature verification should pass on the original message.
+  var verify_result = app.VerifySignature(key.handle, 'Hello', sign_result);
+  assert(verify_result == TPM2_RC_SUCCESS, 'VerifySignature expected to pass');
+
+  // Signature verification should fail on a different message.
+  verify_result = app.VerifySignature(key.handle, 'World', sign_result);
+  assert(verify_result == TPM2_RC_SIGNATURE + TPM2_RC_P + TPM2_RC_2, 'VerifySignature expected to fail');
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+
+  <br> We can ask the TPM to sign the message, then verify the signature externally using the public key.
+  Following code uses the <a href="http://bitwiseshiftleft.github.io/sjcl/">SJCL</a> library.
+
+  <br> {{ macros.code_cell(input="
+  // Create an asymmetric ECC signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Sign the digest of the message 'Hello'.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_ECC, 'Hello');
+  assert(sign_result.rc == TPM2_RC_SUCCESS, 'Sign failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+
+  // Build sjcl ecdsa public key.
+  assert(key.ecc_curve_id == TPM2_ECC_NIST_P256, 'Unexpected curve id');
+  var curve = sjcl.ecc.curves.c256;
+
+  var pub_x = new sjcl.bn(key.ecc_public_x);
+  var pub_y = new sjcl.bn(key.ecc_public_y);
+  var pub = new sjcl.ecc.ecdsa.publicKey(curve,new sjcl.ecc.point(curve, pub_x, pub_y));
+
+  // Build sjcl ecdsa signature.
+  var r = new sjcl.bn(sign_result.ecdsa_r);
+  var s = new sjcl.bn(sign_result.ecdsa_s);
+  var l = sjcl.ecc.curves.c256.r.bitLength();
+  var rs = sjcl.bitArray.concat(r.toBits(l), s.toBits(l));
+
+  // Verify signature.
+  assert(pub.verify(sjcl.hash.sha256.hash('Hello'), rs) == true, 'Signature verification failed');
+
+  print('OK');
+  ")}}
+
+  <br> RSA signing works in much the same way:
+
+  <br> {{ macros.code_cell(input="
+  // Create an asymmetric RSA signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Sign the digest of the message 'Hello'.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_RSA, 'Hello');
+  assert(sign_result.rc == TPM2_RC_SUCCESS, 'Sign failed');
+
+  // Signature verification should pass on the original message.
+  var verify_result = app.VerifySignature(key.handle, 'Hello', sign_result);
+  assert(verify_result == TPM2_RC_SUCCESS, 'VerifySignature expected to pass');
+
+  // Signature verification should fail on a different message.
+  verify_result = app.VerifySignature(key.handle, 'World', sign_result);
+  assert(verify_result == TPM2_RC_SIGNATURE + TPM2_RC_P + TPM2_RC_2, 'VerifySignature expected to fail');
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+
+  <br> We can ask the TPM to sign the message, then verify the signature externally using the public key.
+  Following code uses the <a href="https://github.com/digitalbazaar/forge/">node-forge</a> library.
+
+  <br> {{ macros.code_cell(input="
+  // Create an asymmetric RSA signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Sign the digest of the message 'Hello'.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_RSA, 'Hello');
+  assert(sign_result.rc == TPM2_RC_SUCCESS, 'Sign failed');
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Build forge RSA public key.
+  var bn_n = new forge.jsbn.BigInteger(key.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger('10001', 16);
+  var pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Build forge signature blob.
+  var signature = ByteArrayToForgeBuffer(sign_result.rsa_ssa_sig).data;
+
+  // Compute message digest.
+  var md = forge.md.sha256.create();
+  md.update('Hello');
+
+  // Verify signature.
+  assert(pub.verify(md.digest().bytes(), signature, 'RSASSA-PKCS1-V1_5') == true, 'Signature verification failed');
+
+  print('OK');
+  ")}}
+
+  <br> To encrypt and decrypt using an RSA encryption key, use the <code>TPM2_CC_RSA_Encrypt</code> and
+  <code>TPM2_CC_RSA_Decrypt</code> commands. They correctly encode the message before applying the RSA function.
+
+  <br> {{ macros.code_cell(input="
+  // Create a RSA encryption key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Encrypt and decrypt a message.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.RSAEncrypt(key.handle, message);
+  var decrypted = app.RSADecrypt(key.handle, encrypted);
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('Encrypted:', encrypted);
+  print('Decrypted:', decrypted);
+  print('Original :', message);
+
+  assert(_.isEqual(message, decrypted) == true, 'Message recovered');
+
+  print('OK');
+  ")}}
+
+</p>
+
+<h3>Persistent Keys</h3>
+
+<p>
+  You may have noticed that it takes time to create asymmetric keys, especially long
+  RSA keys. To improve performance you may use <code>TPM2_CC_EvitControl</code> command:
+  it moves a key from volatile memory to nonvolatile memory so it can
+  remain loaded through power cycles.
+
+  <br> {{ macros.code_cell(input="
+  // Create an asymmetric ECC signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Sign the digest of the message 'Hello' using primary handle.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_ECC, 'Hello');
+  assert(sign_result.rc == TPM2_RC_SUCCESS, 'Sign failed');
+
+  // Make key persistent.
+  var phandle = 0x81000000;
+  var rc = app.EvictControl(TPM2_RH_OWNER, key.handle, phandle);
+  assert(rc == TPM2_RC_SUCCESS, 'EvictControl failed');
+
+  // Restart host.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Verify the signature using the persistent handle.
+  var verify_result = app.VerifySignature(phandle, 'Hello', sign_result);
+  assert(verify_result == TPM2_RC_SUCCESS, 'VerifySignature expected to pass');
+
+  // Flush the persistent key.
+  var rc = app.EvictControl(TPM2_RH_OWNER, phandle, phandle);
+  assert(rc == TPM2_RC_SUCCESS, 'EvictControl failed');
+
+  print('OK');
+  ")}}
+
+  <br> Due to the size limitations of NVDATA only a handful of keys can be made persistent.
+  <br> You can save loaded objects with <code>TPM2_CC_ContextSave</code> and <code>TPM2_CC_ContextLoad</code>,
+  however, we'll not discuss that here.
+
+</p>
+

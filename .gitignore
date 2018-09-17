@@ -1,0 +1,5 @@
+build/
+build-web/
+*.swp
+tags
+cscope.*

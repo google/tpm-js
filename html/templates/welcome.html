@@ -1,0 +1,31 @@
+<h2>Welcome</h2>
+<p>TPM-JS lets you experiment with a software <a href="https://en.wikipedia.org/wiki/Trusted_Platform_Module">Trusted Platform Module</a>  (TPM) in your browser. TPM-JS includes the following libraries:
+  <ul>
+    <li>Intel <a href="https://github.com/tpm2-software/tpm2-tss">TPM2 Software Stack (TSS)</a>.</li>
+    <li>IBM <a href="https://sourceforge.net/projects/ibmswtpm2/">software TPM simulator</a>.</li>
+    <li>Google <a href="https://boringssl.googlesource.com/boringssl">BoringSSL</a>.</li>
+  </ul>
+</p>
+
+<p>The TSS library provides high-level APIs to the TPM. It manages TPM resources,
+  marshals command buffers and unmarshals response buffers.
+</p>
+
+<p>The simulator executes TPM commands. It maintains internal state and uses the BoringSSL
+  library for cryptographic operations.
+</p>
+
+<p>
+  <img src="images/architecture.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Architecture">
+</p>
+
+
+<blockquote>TPMs are remarkable! They are passive, low-end devices that offer <b>strong security guarantees</b>.
+</blockquote>
+<p>
+  In this site we'll learn how TPMs work. We'll see how to use the TPM as a cryptographic
+  device. We'll cover topics such as key generation, measured boot, PCRs, remote
+  attestation and key sealing.
+</p>
+

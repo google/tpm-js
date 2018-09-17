@@ -1,0 +1,33 @@
+<h2>TPM Properties</h2>
+
+<p>
+  TPM properties can be queried using the <code>TPM2_CC_GetCapability</code> command
+  with <code>TPM2_CAP_TPM_PROPERTIES</code> argument.
+</p>
+
+<p>
+  The following snippet reads the TPM specification level (<i>1.46</i>) and the
+  manufacturer id (<i>"IBM "</i>).
+
+  <br>
+  {{ macros.code_cell(input="  app.GetTpmProperties();") }}
+</p>
+
+<p>
+  To test whether a particular algorithm is implemented by the TPM, use the <code>TPM2_CC_TestParms</code>  command.
+</p>
+
+<p>
+  The following snippet calls <code>TPM2_CC_TestParms</code> with <code>TPM2_ALG_HMAC</code>  and different hash algorithms. <i>SHA1</i>, <i>SHA256</i> are both implemented
+  by the TPM.
+  <i>SHA512</i>, however, is not.
+
+  <br>
+{{ macros.code_cell(input="
+  assert(app.TestHashParam(TPM2_ALG_SHA1) == TPM2_RC_SUCCESS, 'SHA1 is implemented');
+  assert(app.TestHashParam(TPM2_ALG_SHA256) == TPM2_RC_SUCCESS, 'SHA256 is implemented');
+  assert(app.TestHashParam(TPM2_ALG_SHA512) != TPM2_RC_SUCCESS, 'SHA512 is not implemented');
+  print('OK');
+") }}
+
+</p>

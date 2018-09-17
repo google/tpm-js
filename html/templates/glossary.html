@@ -1,0 +1,48 @@
+<h2>Glossary</h2>
+<dl class="dl-horizontal">
+  <dt>AIK</dt>
+  <dd>Attestation Identity Key. Signing key provided and certified by the TPM owner.
+    Used to sign PCR quotes and certify other keys loaded into the TPM.</dd>
+
+  <dt>CRTM</dt>
+  <dd>Core Root of Trust for Measurement. Immutable code that measures the firmware.</dd>
+
+  <dt>DA</dt>
+  <dd>Dictionary Attack. Keys protected with user-authorization value are also protected
+    against a dictionary attack: the TPM enters a lockout mode after 3 failed attempts.</dd>
+
+  <dt>EK</dt>
+  <dd>Endorsement Key. The primary encryption key derived from the endorsement hierarchy's
+    seed. Used to identify the machine since it doesn't change during the lifetime
+    of the device. Provisioned and certified by the TPM manufacturer.</dd>
+
+  <dt>KDF</dt>
+  <dd>Key Derivation Function. Used to derive key material from a fixed seed.</dd>
+
+  <dt>NVDATA</dt>
+  <dd>Non-Volatile Data. Set of data variables that persist between power cycles. NV
+    data saves private and public variables. Private data includes the TPM's system
+    state and secret seeds. Public data includes certificates and evicted key objects.
+    NV data is limited in size (a few KB).
+  </dd>
+
+  <dt>PCR</dt>
+  <dd>Platform Configuration Register. A register inside the TPM used to store system
+    measurements. Folding-hash semantics.</dd>
+
+  <dt>RA</dt>
+  <dd>Remote Attestation. A protocol that lets a remote party read the boot event log
+    and a fresh PCR quote securely. Protocol is used for host integrity verification.</dd>
+
+  <dt>TCG</dt>
+  <dd>Trusted Computing Group. Organization that develops and defines industry specifications
+    and standards, supportive of hardware based root of trust.</dd>
+
+  <dt>TPM</dt>
+  <dd>Trusted Platform Module. A dedicated cryptographic device. Supports secure key
+    generation and remote system attestation.</dd>
+
+  <dt>TSS</dt>
+  <dd>TPM Software Stack. Host software layer that manages TPM resources (objects),
+    serializes commands buffers and unserializes response buffers.</dd>
+</dl>

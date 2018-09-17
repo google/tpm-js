@@ -1,0 +1,208 @@
+<h2>Measured Boot And Remote Attestation</h2>
+
+<p>
+  In the <a class="self" href="#pg_pcrs">previous</a> section we saw how PCRs efficiently
+  record a sequence of measurements. We also saw how to securely read PCR values
+  from the TPM. The last piece of the puzzle is how to get <b>meaningful measurements</b>  into the TPM.
+  <br> The solution is a standardized technology supported by modern firmwares
+  and operating systems called "measured boot".
+</p>
+
+<h3>Measured Boot</h3>
+
+<p>
+  In measured boot each element in the boot process measures its successor's code
+  and data regions before handing off execution to that element. Measured boot
+  proves the <b>integrity state</b> of the host platform: a compromised OS will
+  be detected because a malicious boot element (bootkit / rootkit) is measured
+  before it has a chance to modify the system.
+</p>
+
+<p>
+  <br>For our discussion we'll simplify the boot process to have only three components:
+  firmware &rarr; bootloader &rarr; kernel.
+</p>
+
+<p>
+  <img src="images/measured_boot.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Measured Boot">
+</p>
+
+<p>
+  Measured boot as depicted above raises the following questions:
+  <ol>
+    <li>Who measures the firmware? Or generally, how do we trust the firmware?</li>
+    <li>TPM concisely records the host state: it stores a folding hash of all measurements.
+      How do we interpret it? How do we know what was measured?</li>
+  </ol>
+
+  <br>There are two general answers to the first question. The first, you trust
+  the firmware. The firmware measures it self into PCR0. Firmware vendors are expected
+  to publish their "good know" measurements for firmware blobs they distribute.
+  Using these, one can verify a good firmware was loaded. The second answer involves
+  an <b>immutable</b> code component called Core Root of Trust for Measurement
+  (CRTM). It is the first piece of code that executes on the main processor during
+  the boot process. It measures the firmware blob before passing executing to it.
+</p>
+
+<p>
+  <br>The answer to the second question is PCR numbers and the boot event log.
+  Remember that we have a (limited) number of PCRs at our disposal. Instead of
+  measuring everything to a single PCR, measured boot measures different things
+  to different PCRs. For instance, the firmware is measured into PCR0. The disk
+  layout is measured into PCR5 and the boot loader is measured into PCR4. This
+  provides a crude way to figure out what component of the system changed during
+  boot. The second way to interpret PCR values is via the boot event log, which
+  we'll discuss next.
+
+</p>
+
+
+<h3>Event Log</h3>
+
+<p>
+  The boot event log provides <b>context</b> for measurements. The log details
+  each measurement sent to the TPM. It's maintained by the firmware, bootloader
+  and later the OS. Users can query the OS for its boot event log, and read what
+  components were measured during boot.
+</p>
+
+<p>
+  <img src="images/event_log.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Measured Boot With Event Log">
+</p>
+
+<p>
+  <br>A simplified event log might look like:
+  <pre>
+    Fimware blob "firmware.bin", PCR8, digest=0x11223344.
+    Boot app "/EFI/Windows/Bootloader.efi", PCR8, digest=0x55667788.
+    Kernel image "c:\Windows\ntoskrnl.exe", PCR8, digest=0x99AABBCC.</pre>
+
+  <br>To <b>validate</b> the event log's integrity, you should <b>playback</b>  the digests extended into a PCR. Then, read (quote) the actual PCR value from
+  the TPM, and compare it with the expected value from the log. If they match,
+  the event log's integrity is valid, and therefore, can be trusted.
+</p>
+
+<h3>Remote Attestation Protocol</h3>
+<p>
+  Remote attestation (RA) protocol combines all that we've learned: it lets a remote
+  party query the integrity state of a target host, without assuming any trust
+  on that host.
+  <br> In RA, the remote attester reads the boot event log and a fresh PCR quote.
+  It validates the event log's integrity by comparing the actual PCR values to
+  the expected ones from the log. It then evaluates the integrity state of the
+  host: do we trust this particular firmware that was loaded? This particular boot
+  loader and OS kernel? It can also set a policy around these measurements, and
+  enforce, for instance, that an up-to-date kernel is running.
+
+  <br> A compromised host will be detected. An attacker can deny access to the
+  TPM or to the boot event log, but this denial of service will result in an untrusted host.
+</p>
+
+<p>
+  <img src="images/remote_attestation.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Remote Attestation">
+</p>
+
+<p>
+  <br> {{ macros.code_cell(input="
+  // Simulate measured boot.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  var boot_log = [];
+  function MeasureElement(description, data, pcr) {
+    // Add digest to event log.
+    var md = forge.md.sha256.create();
+    md.update(data);
+    boot_log.push({description: description, pcr: pcr, digest: md.digest().bytes()});
+    // Extend PCR with digest.
+    var rc = app.ExtendPcr(/*pcr=*/pcr, data);
+    assert(rc == TPM2_RC_SUCCESS, 'ExtendPcr failed');
+  }
+
+  // CRTM measures the firmware and passes control to it.
+  MeasureElement('Firmware ver 1234', 'Firmware blob', 0);
+
+  // Firmware measures the boot loader and passes control to it.
+  MeasureElement('Boot loader /EFI/boot.efi', 'Boot loader blob', 1);
+
+  // Boot loader measures the OS kernel and passes control to it.
+  MeasureElement('Kernel file /boot/vmlinuz-linux', 'Kernel blob', 1);
+
+  // Create a restricted RSA signing key.
+  // Assume this key is trusted by the remote verifier.
+  var aik = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
+  assert(aik.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Remote attester generates a random nonce.
+  // The challenge is sent to the host.
+  var challenge = Math.random().toString(36);
+
+  // Sign PCR quote with random nonce.
+  var quote_result = app.Quote(aik.handle, /*nonce=*/ challenge);
+  assert(quote_result.rc == TPM2_RC_SUCCESS, 'Quote failed');
+
+  // Unload key.
+  assert(app.FlushContext(aik.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Build forge RSA public key.
+  var bn_n = new forge.jsbn.BigInteger(aik.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger('10001', 16);
+  var pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Build forge signature blob.
+  assert(quote_result.sign_algo == TPM2_ALG_RSASSA, 'Unexpected sign algo');
+  assert(quote_result.hash_algo == TPM2_ALG_SHA256, 'Unexpected hash algo');
+  var signature = ByteArrayToForgeBuffer(quote_result.rsa_ssa_sig).data;
+
+  // Compute message digest.
+  var md = forge.md.sha256.create();
+  md.update(ByteArrayToForgeBuffer(quote_result.tpm2b_attest).data);
+
+  // Remote attester verifies signature.
+  assert(pub.verify(md.digest().bytes(), signature, 'RSASSA-PKCS1-V1_5') == true, 'Signature verification failed');
+
+  // Unmarshal the serialized TPMS_ATTEST buffer.
+  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  assert(attested.rc == TPM2_RC_SUCCESS, 'Unmashal failed');
+
+  // Extract the nonce from the tpm2b_attest buffer.
+  // It should match the random challenge that we sent. This proves the attested data is fresh.
+  var signed_nonce = ByteArrayToForgeBuffer(attested.nonce);
+  assert(_.isEqual(signed_nonce.data, challenge) == true, 'Nonce does not match challenge');
+
+  // Playback digests from boot_log.
+  var pcrs = [forge.util.hexToBytes('0000000000000000000000000000000000000000000000000000000000000000'),
+              forge.util.hexToBytes('0000000000000000000000000000000000000000000000000000000000000000'),
+              forge.util.hexToBytes('0000000000000000000000000000000000000000000000000000000000000000'),
+              forge.util.hexToBytes('0000000000000000000000000000000000000000000000000000000000000000')];
+  for (var i in boot_log) {
+    // PCR := Hash(PCR || M)
+    var extend = new forge.sha256.create();
+    extend.update(pcrs[boot_log[i].pcr]);
+    extend.update(boot_log[i].digest);
+    pcrs[boot_log[i].pcr] = extend.digest().bytes();
+  }
+
+  // app.Quote selects PCR0, PCR1, PCR2 and PCR3. Therefore, the expected quote
+  // is the digest of <PCR0, PCR1, PCR2, PCR3>.
+  var expected_pcrs = new forge.sha256.create();
+  expected_pcrs.update(pcrs[0]);
+  expected_pcrs.update(pcrs[1]);
+  expected_pcrs.update(pcrs[2]);
+  expected_pcrs.update(pcrs[3]);
+
+  // Extract selected PCRs digest from the tpm2b_attest buffer.
+  // It should match the expected digest computed above.
+  var signed_pcrs = ByteArrayToForgeBuffer(attested.selected_pcr_digest);
+  assert(_.isEqual(signed_pcrs.data, expected_pcrs.digest().data) == true, 'PCRs dont match');
+
+  // Boot log's integrity is verified. Its contents can be used for host integrity evaluation.
+
+  print('OK');
+  ") }}
+</p>

@@ -1,0 +1,239 @@
+<h2>Authorization</h2>
+<p>
+  Communication with the TPM device is done over Memory Mapped IO (MMIO): a region
+  of physical memory is reserved for sending and receiving data from the TPM. This
+  means that any (privileged) code on the host can interact with the TPM. To protect
+  against unwanted use, the TPM lets users and administrators set authorization
+  policies. With this policy in place, only users with the right authorization
+  token can use TPM entities like keys and NV indices.
+  <br>The TPM supports many authorization schemes. In this lesson we'll work with
+  simple password authorization scheme.
+</p>
+
+<h3>Hierarchy Authorization</h3>
+<p>
+  Use <code>TPM2_CC_HierarchyChangeAuth</code> command to set a hierarchy
+  wide authorization value:
+
+  <br> {{ macros.code_cell(input="
+
+  // Set owner authorization string.
+  var rc = app.HierarchyChangeAuth(TPM2_RH_OWNER, 'secret-password');
+  assert(rc == TPM2_RC_SUCCESS, 'HierarchyChangeAuth failed');
+
+  // Creating a key in this hierarchy without specifying the authz string
+  // fails with TPM2_RC_BAD_AUTH.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_BAD_AUTH, 'CreatePrimary expected to fail');
+
+  // Creating a key with the wrong authz string also fails with TPM2_RC_BAD_AUTH.
+  app.SetAuthPassword('bad-password');
+  key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_BAD_AUTH, 'CreatePrimary expected to fail');
+
+  // It's impossible to reset the hierarchy's auth without the right password.
+  var rc = app.HierarchyChangeAuth(TPM2_RH_OWNER, 'new-password');
+  assert(rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_BAD_AUTH, 'HierarchyChangeAuth expected to fail');
+
+  // Creating a key with the correct authz string succeeds.
+  app.SetAuthPassword('secret-password');
+  key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Unload key.
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Clear authz.
+  assert(app.HierarchyChangeAuth(TPM2_RH_OWNER,'') == TPM2_RC_SUCCESS, 'HierarchyChangeAuth failed');
+  app.SetAuthPassword('');
+
+  print('OK');
+  ")}}
+</p>
+
+<p>
+  It's important to note a few things. First, the password authorization string is
+  transmitted in the clear. Look at the (verbose) debug logs on the right, you'll
+  see the string "secret-password" passed in the clear at the beginning of the
+  command. Second, <code>app.SetAuthPassword()</code> doesn't invoke a TPM command.
+  This function changes the internal state of the TSS: it sets the <code>TPM2L_SYS_AUTH_COMMAND</code>  <code>sessions_data_.auths[0].hmac.buffer</code> value to the given password
+  string. It later prepends this value to all (authenticated) TPM commands like
+  <code>TPM2_CC_CreatePrimary</code>.
+
+</p>
+
+<p>
+  <div class="alert alert-info" role="alert">A common practice is to set the owner hierarchy's auth value to a random string
+    during <a class="self" href="#pg_ownership">provisioning</a>. It protects keys
+    on this hierarchy against unwanted use.
+  </div>
+</p>
+
+<h3>Key Authorization</h3>
+<p>
+  In addition to hierarchy authorization, TPM supports individual key authorization.
+  <br>To add key authorization, set the <code>TPMA_OBJECT_USERWITHAUTH</code> bit
+  in <code>TPM2B_PUBLIC</code> objectAttributes field and the sensitive.userAuth
+  field in <code>TPM2B_SENSITIVE_CREATE</code> structure.
+
+  <br> {{ macros.code_cell(input="
+  // Create primary key with authorization password.
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'',
+                                  /*user_auth=*/'secret-password');
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Authz value is verified when someone tries to USE the key, for instance,
+  // when someone tries to create a child key under it.
+  app.SetAuthPassword('bad-password');
+  var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_AUTH_FAIL, 'Create expected to fail');
+
+  // With the correct authz value, app.Create succeeds.
+  app.SetAuthPassword('secret-password');
+  var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, 'Create failed');
+
+  // Unload key.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Clear session authz.
+  app.SetAuthPassword('');
+
+  print('OK');
+  ")}}
+
+  <br> Child keys can be protected in a similar way:
+  <br> {{ macros.code_cell(input="
+  // Create regular primary key.
+  var pk = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                             /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(pk.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Create a child key with user-auth value.
+  var key = app.Create(pk.handle, TPM2_ALG_RSA,
+                       /*restricted=*/0, /*decrypt=*/1, /*sign=*/1,
+                       /*user_auth=*/'secret-password');
+  assert(key.rc == TPM2_RC_SUCCESS, 'Create failed');
+
+  // Load succeeds because the parent does not require authorization.
+  var loaded_key = app.Load(pk.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, 'Load failed');
+
+  // Encrypt works without authorization because it's not an authenticated command
+  // (anyone can use the public key to encrypt data).
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.RSAEncrypt(loaded_key.handle, message);
+
+  // Decrypt requires authorization.
+  app.SetAuthPassword('secret-password');
+  var decrypted = app.RSADecrypt(loaded_key.handle, encrypted);
+  assert(_.isEqual(message, decrypted) == true, 'Message recovered');
+
+  // Unload keys.
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(pk.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Clear session authz.
+  app.SetAuthPassword('');
+
+  print('OK');
+  ")}}
+
+</p>
+
+<h3>Dictionary Attack Protection and Lockout Mode</h3>
+<p>
+  When a wrong password is used for more than 3 attempts, the TPM enters a <b>locked-out</b> mode.
+  This feature protects keys against a <a href="https://en.wikipedia.org/wiki/Dictionary_attack">dictionary attack</a> (DA).
+
+  <br> {{ macros.code_cell(input="
+  // Create primary key with authorization password.
+  primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                              /*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/'',
+                              /*user_auth=*/'secret-password');
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Create a child key with the wrong password.
+  // It will fail, and put the TPM in lock-out mode.
+  for (var i=0; i<3; i++) {
+    app.SetAuthPassword('password-guess' + i);
+    var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+    if (key.rc == TPM2_RC_LOCKOUT) {
+      // We might enter lockout before 3 failures because the cells above
+      // may also increment the failed tries counter.
+      break;
+    }
+    assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_AUTH_FAIL, 'Create expected to fail');
+  }
+
+  app.SetAuthPassword('password-guess4');
+  key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_LOCKOUT, 'Create expected to fail');
+
+  print('OK');
+  ")}}
+
+  <br> <div class="alert alert-warning" role="alert">The TPM will not accept any command for the target object
+    while in lock-out mode. The TPM will self-heal after a pre-define amount of time - 10 seconds in our lab.</div>
+
+  <br> Run the following cell after <b>waiting for at least ten seconds</b>.
+
+  <br> {{ macros.code_cell(input="
+  // Create a key with the correct password.
+  // After the TPM recovers from its lock-out mode (10 seconds in our lab), it will
+  // successfully create the key.
+  app.SetAuthPassword('secret-password');
+  var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, 'Create failed. Try re-running this cell in 10 seconds');
+
+  // Unload primary.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Clear session authz.
+  app.SetAuthPassword('');
+
+  print('OK');
+  ")}}
+
+</p>
+
+<h3>Password Protected Data Blobs</h3>
+<p>
+  <code>TPM2B_SENSITIVE_CREATE</code> has another field for storing data blobs.
+  Use this with a <code>TPM2_ALG_KEYEDHASH</code> key to protect a data blob with
+  a password. The data blob will be returned via <code>TPM2_CC_Unseal</code> command,
+  only if the user has the correct authorization value.
+
+  <br> {{ macros.code_cell(input="
+  // Create KEYEDHASH key.
+  // Note how restricted = decrypt = sign = 0.
+  // Note how we set the auth value and the sensitive data.
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_KEYEDHASH,
+                              /*restricted=*/0, /*decrypt=*/0, /*sign=*/0, /*unique=*/'',
+                              /*user_auth=*/'secret-password',
+                              /*sensitive_data=*/'secret-data-blob');
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Unsealing the data with the wrong password fails.
+  app.SetAuthPassword('wrong-password');
+  var unsealed = app.Unseal(primary.handle);
+  assert(unsealed.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_AUTH_FAIL, 'Unseal expected to fail');
+
+  // Unsealing the data with the correct password succeeds.
+  app.SetAuthPassword('secret-password');
+  unsealed = app.Unseal(primary.handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, 'Unseal failed');
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  assert(_.isEqual(unsealed_data, 'secret-data-blob'), 'Sensitive data does not match');
+
+  // Unload primary.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Clear session authz.
+  app.SetAuthPassword('');
+
+  print('OK');
+  ")}}
+
+</p>

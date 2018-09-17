@@ -1,0 +1,75 @@
+<h2>Ownership, SRK and AIK</h2>
+
+<p>
+  The EK protects keys on the endorsement hierarchy. It is trusted thanks to its
+  certificate. Keys on the owner hierarchy, however, cannot be trusted because
+  they're not protected by the EK.
+  <br>It is the owner's responsibility to provision and certify the primary encryption
+  key on the owner hierarchy (here, "owner" refers to the end-user of the TPM -
+  us).
+
+  <br> The Storage Rook Key (SRK), is a primary, <b>restricted encryption key</b>  on the owner hierarchy, derived from the oseed. The SRK protects keys on the
+  owner hierarchy. It is trusted because the owner certified the key while when
+  ownership.
+
+  <br> As we'll see later, having a trusted, <b>restricted signing key</b> is useful
+  for remote system attestation. It's, therefore, recommended to create and certify
+  a restricted signing key during provisioning time. This trusted signing key is
+  also called Attestation Identity Key (AIK).
+</p>
+
+<h2>Taking Ownership</h2>
+<p>
+  <br> It's good practice to perform this setup step in a <b>clean environment</b>  (OS booted from CD, host is not connected to the network).
+
+  <br> The process includes the following steps:
+
+  <ol>
+    <li>Read and <a class="self" href="#pg_certificates">validate</a> the EK certificate.
+      Proceed only if you trust the vendor.</li>
+
+    <li>Clear the owner hierarchy with <code>TPM2_CC_Clear</code>.</li>
+
+    <li>Create a primary, restricted asymmetric encryption key on the owner hierarchy
+      (
+      <code>TPM2_CC_CreatePrimary</code>).
+      <br>Call this the <em>SRK</em>.
+    </li>
+
+    <li>Certify the SRK with your enterprise CA: create a Certificate Signing Request
+      (CSR) with SRKpub, and ask your internal, trusted CA to sign it. Store the
+      certificate in NV data (<code>TPM2_CC_NV_DefineSpace</code>, <code>TPM2_CC_NV_Write</code>).
+      <br> Alternatively, you can store the SRK public key in a remote database.
+      Use this database to verify the SRK's authenticity in the future.
+    </li>
+
+    <li>Make the SRK persistent by evicting it to NVDATA (<code>TPM2_CC_EvitControl</code>).</li>
+
+    <li>Create a restricted asymmetric signing key <b>under the SRK</b> (<code>TPM2_CC_Create</code>,
+      <code>TPM2_CC_Load</code>).
+      <br>Call this the <em>AIK</em>.
+    </li>
+
+    <li>Certify the AIK with your enterprise CA: create a Certificate Signing Request
+      (CSR) with AIKpub, and ask your internal, trusted CA to sign it. Store the
+      certificate in NV data (<code>TPM2_CC_NV_DefineSpace</code>, <code>TPM2_CC_NV_Write</code>).
+      <br> Alternatively, you can store the AIK public key in a remote database.
+      Use this database to verify the AIK's authenticity in the future.
+      <br> It's possible to use the SRK-cert as root of trust for the AIK, however,
+      having an AIKcert can simplify some workflows.
+    </li>
+
+    <li>Make the AIK persistent by evicting it to NVDATA (<code>TPM2_CC_EvitControl</code>).</li>
+
+  </ol>
+
+  <br> Please note, these keys should be set as fixed (non-duplicable): use
+  <code>TPMA_OBJECT_FIXEDTPM</code> and <code>TPMA_OBJECT_FIXEDPARENT</code> in
+  the objectAttributes field in their templates.
+
+  <br>
+</p>
+<p>
+  <div class="alert alert-info" role="alert">At this point we have two trusted keys we can use: one for storage (protecting
+    other TPM keys) and one for signing TPM statements.</div>
+</p>

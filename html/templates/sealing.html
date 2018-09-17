@@ -1,0 +1,406 @@
+<h2>Sealing Data and Keys</h2>
+
+In this lesson we'll see how the TPM can seal secrets (data blobs or cryptographic
+keys) to the host system state as captured in its PCR values. We'll introduce a
+new concept - session authorization - which naturally extends concepts from the
+previous lesson on authorization.
+
+<h3>Session Authorization</h3>
+<p>
+A session is an internal TPM object that encodes an authorization value.
+Until now we've been implicitly using the <code>TPM2_RS_PW</code> session handle to
+authorize commands with either an empty or a user defined password.
+</p>
+
+<h4>Trial Session</h4>
+<p>
+The mechanics of using a session is as follows. First, we create a <b>trial</b> session object
+with <code>TPM2_StartAuthSession</code> command. A trial session accepts user defined PCR values
+in <code>TPM2_PolicyPCR</code> command. This command updates a folding hash field in the session
+object called <i>policy_digest</i>. The policy digest value can be read through <code>TPM2_PolicyGetDigest</code>.
+Finally, we plug the policy digest into <code>publicArea.authPolicy</code> field in <code>TPM2B_PUBLIC</code>
+passed to <code>TPM2_CreatePrimary</code> or <code>TPM2_Create</code>.
+<br>The authPolicy field protects the key object: any authorized command that uses the key must include a handle
+to a session with the expected auth digest. We'll see how it works in the following sections.
+</p>
+<p>
+Calculating the authPolicy digest using a trial session is summarized in the following diagram:
+</p>
+
+<p>
+  <img src="images/trial_session.svg" class="img-responsive center-block" style="max-width:90%"
+    alt="Trial Session">
+</p>
+<p>
+  <div class="alert alert-info" role="alert">A trial session doesn't include any secrets, it's, therefore, possible
+    to compute the expected authPolicy digest offline, without a TPM. </div>
+</p>
+
+<p>
+  {{ macros.code_cell(input="
+  // Start trial session.
+  var trial = app.StartAuthSession(/*trial=*/true);
+  assert(trial.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+
+  // Initial digest is all zeros.
+  var policy_digest = app.PolicyGetDigest(trial.handle);
+  assert(_.isEqual(policy_digest, [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]), 'Init policy');
+
+  // Update policy with dummy digest.
+  var rc = app.PolicyPCR(trial.handle, StringToStdVector('test'));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+
+  // Policy digest is updated deterministically.
+  var policy_digest = app.PolicyGetDigest(trial.handle);
+  assert(_.isEqual(policy_digest.slice(0, 5), [240,178,156,111,19]), 'Policy updated');
+
+  // Unload session.
+  assert(app.FlushContext(trial.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+</p>
+
+<h4>Policy Session</h4>
+<p>
+Once a key is protected with authPolicy, it can only be used with a session that encodes the expected
+auth digest. Like before, we create a new session object using <code>TPM2_StartAuthSession</code>, only
+this time we create a <code>TPM2_SE_POLICY</code> session and not a <code>TPM2_SE_TRIAL</code> session.
+<br>A call to <code>TPM2_PolicyPCR</code> hashes the contents of the <b>actual</b> PCR values into the
+session policy_digest field. Finally, when we call <code>TPM2_Unseal</code>, the TPM evaluates the
+session's policy digest and compares it against the key's expected authPolicy digest. If they match,
+the sealed data is returned to the user, otherwise, it fails with an error.
+</p>
+
+<p>
+Policy session with good (expected) PCR values:
+</p>
+
+<p>
+  <img src="images/policy_session_good.svg" class="img-responsive center-block" style="max-width:90%"
+    alt="Trial Session">
+</p>
+
+<p>
+  {{ macros.code_cell(input="
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a good value.
+  var rc = app.ExtendPcr(0, 'Hello');
+  assert(rc == TPM2_RC_SUCCESS, 'ExtendPcr failed');
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with 'Hello'.
+  var auth_policy = forge.util.hexToBytes('e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a');
+
+  // Seal data using auth_policy.
+  var key = app.Create(primary.handle, TPM2_ALG_KEYEDHASH, /*restricted=*/0, /*decrypt=*/0, /*sign=*/0,
+                       /*user_auth=*/'', /*sensitive_data=*/'secret-data-blob',
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  var loaded_key = app.Load(primary.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, 'Load failed');
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(''));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+
+  // Unseal succeeds because PCR values match:
+  // session policy digest == key auth policy digest.
+  var unsealed = app.Unseal(loaded_key.handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, 'Unseal failed');
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  assert(_.isEqual(unsealed_data, 'secret-data-blob'), 'Sensitive data does not match');
+
+  // Unload session and keys.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+</p>
+
+<p>
+Policy session with bad (unexpected) PCR values:
+</p>
+<p>
+  <img src="images/policy_session_bad.svg" class="img-responsive center-block" style="max-width:90%"
+    alt="Trial Session">
+</p>
+
+<p>
+  {{ macros.code_cell(input="
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a bad value.
+  var rc = app.ExtendPcr(0, 'Goodbye');
+  assert(rc == TPM2_RC_SUCCESS, 'ExtendPcr failed');
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with 'Hello'.
+  var auth_policy = forge.util.hexToBytes('e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a');
+
+  // Seal data using auth_policy.
+  var key = app.Create(primary.handle, TPM2_ALG_KEYEDHASH, /*restricted=*/0, /*decrypt=*/0, /*sign=*/0,
+                       /*user_auth=*/'', /*sensitive_data=*/'secret-data-blob',
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  var loaded_key = app.Load(primary.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, 'Load failed');
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(''));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+
+  // Unseal fails because PCR values do not match:
+  // session policy digest != key auth policy digest.
+  var unsealed = app.Unseal(loaded_key.handle);
+  assert(unsealed.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_POLICY_FAIL, 'Unseal expected to fail');
+
+  // Unload session and keys.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+</p>
+
+<p>
+<div class="alert alert-info" role="alert">Note that UserWithAuth bit in the object attributes struct
+  should be cleared when calling <code>TPM2_Create</code> with an auth_policy. This makes the policy
+  mandatory.</div>
+</p>
+
+<h3>Sealing Keys</h3>
+<p>
+  Previously we saw how keys protect PCR reports, now we'll see how PCRs protect
+  keys. The two main functionalities provided by the TPM complement each other:
+</p>
+
+<p>
+  <img src="images/complement_2.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Seal Operation">
+</p>
+
+<p>
+  To seal a data blob we've used a <code>TPM2_ALG_KEYEDHASH</code> key with authPolicy.
+  To seal a key, we're going to use a <code>TPM2_ALG_SYMCIPHER</code> key with authPolicy. Encryption/decryption
+  operations with this key are protected by a policy session.
+
+  <br>{{ macros.code_cell(input="
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a good value.
+  var rc = app.ExtendPcr(0, 'Hello');
+  assert(rc == TPM2_RC_SUCCESS, 'ExtendPcr failed');
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with 'Hello'.
+  var auth_policy = forge.util.hexToBytes('e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a');
+
+  // symmetric encryption key with auth policy.
+  var key = app.Create(primary.handle, TPM2_ALG_SYMCIPHER,
+                       /*restricted=*/0, /*decrypt=*/1, /*sign=*/1,
+                       /*user_auth=*/'', /*sensitive_data=*/'',
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  assert(key.rc == TPM2_RC_SUCCESS, 'Create failed');
+
+  var loaded_key = app.Load(primary.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, 'Load failed');
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+  app.SetSessionHandle(session.handle);
+
+  // Encrypt and decrypt a message.
+  // We need to call PolicyPCR before each command, because the session
+  // policy digest is reset after each command.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(''));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+  var encrypted = app.Encrypt(loaded_key.handle, message);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(''));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+  var decrypted = app.Decrypt(loaded_key.handle, encrypted);
+  assert(_.isEqual(message, decrypted) == true, 'Message recovered');
+
+  // Unload session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Unload keys.
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+</p>
+
+<h3>Protecting Keys With A Sealed Password</h3>
+<p>
+  A common practice is to protect keys with a randomly generated password, then seal that
+  password data blob to PCR values. This scheme has the advantage of having an easy, password less
+  access to the key when the host is in a good know state. Additionally, by storing the password
+  offline, the user has a recovery solution: access to the key is always granted when the password
+  is entered manually.
+  <br>We'll build on examples from the previous sections on authorization and sealing.
+
+  <br>{{ macros.code_cell(input="
+  // Randomly generated password.
+  var password = forge.util.bytesToHex(ByteArrayToForgeBuffer(app.GetRandom(10)));
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with 'Hello'.
+  var auth_policy = forge.util.hexToBytes('e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a');
+
+  // key1 protects the password with an auth policy.
+  var key1 = app.Create(primary.handle, TPM2_ALG_KEYEDHASH, /*restricted=*/0, /*decrypt=*/0, /*sign=*/0,
+                       /*user_auth=*/'', /*sensitive_data=*/password,
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  assert(key1.rc == TPM2_RC_SUCCESS, 'Create failed');
+
+  // Make key1 persistent.
+  var key1_handle = 0x81000000;
+  var loaded_key1 = app.Load(primary.handle, key1.tpm2b_private, key1.tpm2b_public);
+  assert(loaded_key1.rc == TPM2_RC_SUCCESS, 'Load failed');
+  var rc = app.EvictControl(TPM2_RH_OWNER, loaded_key1.handle, key1_handle);
+  assert(rc == TPM2_RC_SUCCESS, 'EvictControl failed');
+
+  // key2 is a password-protected symmetric encryption key.
+  var key2 = app.Create(primary.handle, TPM2_ALG_SYMCIPHER,
+                       /*restricted=*/0, /*decrypt=*/1, /*sign=*/1,
+                       /*user_auth=*/password);
+  assert(key2.rc == TPM2_RC_SUCCESS, 'Create failed');
+
+  // Make key2 persistent.
+  var key2_handle = 0x81000001;
+  var loaded_key2 = app.Load(primary.handle, key2.tpm2b_private, key2.tpm2b_public);
+  assert(loaded_key2.rc == TPM2_RC_SUCCESS, 'Load failed');
+  var rc = app.EvictControl(TPM2_RH_OWNER, loaded_key2.handle, key2_handle);
+  assert(rc == TPM2_RC_SUCCESS, 'EvictControl failed');
+
+  // Unload primary.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a bad value.
+  var rc = app.ExtendPcr(0, 'Goodbye');
+  assert(rc == TPM2_RC_SUCCESS, 'ExtendPcr failed');
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(''));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+
+  // Unseal fails because PCR values do not match:
+  // session policy digest != key auth policy digest.
+  var unsealed = app.Unseal(key1_handle);
+  assert(unsealed.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_POLICY_FAIL, 'Unseal expected to fail');
+
+  // Unload session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a good value.
+  var rc = app.ExtendPcr(0, 'Hello');
+  assert(rc == TPM2_RC_SUCCESS, 'ExtendPcr failed');
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(''));
+  assert(rc == TPM2_RC_SUCCESS, 'PolicyPCR failed');
+
+  // Unseal succeeds because PCR values match:
+  // session policy digest == key auth policy digest.
+  var unsealed = app.Unseal(key1_handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, 'Unseal failed');
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  assert(_.isEqual(unsealed_data, password), 'Sensitive data does not match');
+
+  // Unload session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Authenticate to key2 using the unsealed password.
+  app.SetAuthPassword(unsealed_data);
+
+  // Encrypt and decrypt a message.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.Encrypt(key2_handle, message);
+  var decrypted = app.Decrypt(key2_handle, encrypted);
+  assert(_.isEqual(message, decrypted) == true, 'Message recovered');
+
+  // Clear session authz.
+  app.SetAuthPassword('');
+
+  // Flush persistent keys.
+  assert(app.EvictControl(TPM2_RH_OWNER, key1_handle, key1_handle) == TPM2_RC_SUCCESS, 'EvictControl failed');
+  assert(app.EvictControl(TPM2_RH_OWNER, key2_handle, key2_handle) == TPM2_RC_SUCCESS, 'EvictControl failed');
+
+  print('OK');
+  ")}}
+</p>
