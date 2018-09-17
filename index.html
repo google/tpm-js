@@ -1,0 +1,3677 @@
+<!--
+  Copyright 2018 Google LLC
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="">
+  <meta name="author" content="">
+
+  <title>TPM-JS</title>
+  <link rel="icon" type="image/png" href="images/favicon.ico" />
+
+
+  <!-- CSS -->
+  <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/css/bootstrap.min.css"
+    integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u"
+    crossorigin="anonymous" />
+
+  <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/bootstrap-table/1.12.1/bootstrap-table.min.css"
+    crossorigin="anonymous" />
+  <link rel="stylesheet" href="css/main.css" />
+
+
+  <!-- Javascript -->
+  <script type="text/javascript" src="https://code.jquery.com/jquery-3.3.1.min.js"
+    integrity="sha256-FgpCb/KJQlLNfOu91ta32o/NMZxltwRo8QtmkMRdAu8=" crossorigin="anonymous"></script>
+  <script type="text/javascript" src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"
+    integrity="sha384-Tc5IQib027qvyjSMfHjOMaLkfuWVxZxUPnCJA7l2mCWNIpG9mGCD8wGNIcPD7Txa"
+    crossorigin="anonymous"></script>
+  <script src="//cdnjs.cloudflare.com/ajax/libs/bootstrap-table/1.12.1/bootstrap-table.min.js"
+    crossorigin="anonymous"></script>
+  <script src="https://cdn.rawgit.com/google/code-prettify/master/loader/run_prettify.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.9.1/underscore-min.js" integrity="sha256-G7A4JrJjJlFqP0yamznwPjAApIKPkadeHfyIwiaa9e0=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/sjcl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/bn.js" integrity="sha256-3sG2Ebk/cRSft/ho8BwOMhz7F6v93VWHfmSWlLWlTCA=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/sha256.js" integrity="sha256-wT4mQyiVx0+K4Zf04YESH4U2O5OooLOp4aCYlpeQxEI=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/ecc.js" integrity="sha256-zClRcOVvsyJAAC/TZ7juVln1hrTicUl3HnOH6xKiUWk=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/node-forge@0.7.5/dist/forge.all.min.js" integrity="sha256-tTxeWljNYMd8KHKLWEb7dGkjyjLd33mo23ecfm8nckM=" crossorigin="anonymous"></script>
+
+
+  <script>
+    var Module = {
+      locateFile: function(url)
+      {
+        return "wasm/" + url;
+      }
+    };
+  </script>
+  <script type="text/javascript" src="wasm/bindings.js"></script>
+  <script type="text/javascript" src="js/consts.js"></script>
+  <script type="text/javascript" src="js/main.js"></script>
+</head>
+
+<body>
+  <!-- Top navbar -->
+  <nav class="navbar navbar-inverse navbar-default navbar-fixed-top">
+    <div class="container">
+      <div class="navbar-header">
+        <a class="navbar-brand" href="index.html">TPM-JS</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container-fluid">
+    <div class="row">
+      <!-- Sidebar -->
+      <div class="col-md-1 sidebar">
+        <ul class="nav nav-sidebar">
+                    <li id="side_pg_welcome"  class="active" >
+            <a href="#pg_welcome" data-value="pg_welcome">Welcome</a>
+          </li>
+                    <li id="side_pg_introduction" >
+            <a href="#pg_introduction" data-value="pg_introduction">Introduction</a>
+          </li>
+                    <li id="side_pg_properties" >
+            <a href="#pg_properties" data-value="pg_properties">Properties</a>
+          </li>
+                    <li id="side_pg_random" >
+            <a href="#pg_random" data-value="pg_random">Random</a>
+          </li>
+                    <li id="side_pg_keys" >
+            <a href="#pg_keys" data-value="pg_keys">Keys</a>
+          </li>
+                    <li id="side_pg_certificates" >
+            <a href="#pg_certificates" data-value="pg_certificates">Certificates</a>
+          </li>
+                    <li id="side_pg_ownership" >
+            <a href="#pg_ownership" data-value="pg_ownership">Ownership</a>
+          </li>
+                    <li id="side_pg_pcrs" >
+            <a href="#pg_pcrs" data-value="pg_pcrs">PCRs</a>
+          </li>
+                    <li id="side_pg_attestation" >
+            <a href="#pg_attestation" data-value="pg_attestation">Attestation</a>
+          </li>
+                    <li id="side_pg_authorization" >
+            <a href="#pg_authorization" data-value="pg_authorization">Authorization</a>
+          </li>
+                    <li id="side_pg_sealing" >
+            <a href="#pg_sealing" data-value="pg_sealing">Sealing</a>
+          </li>
+                    <li id="side_pg_glossary" >
+            <a href="#pg_glossary" data-value="pg_glossary">Glossary</a>
+          </li>
+                    <li id="side_pg_reading" >
+            <a href="#pg_reading" data-value="pg_reading">Reading</a>
+          </li>
+                </div>
+
+      <!-- Page -->
+      <div class="col-md-6">
+                <div id=pg_welcome
+             class="page"
+             >
+          <h2>Welcome</h2>
+<p>TPM-JS lets you experiment with a software <a href="https://en.wikipedia.org/wiki/Trusted_Platform_Module">Trusted Platform Module</a>  (TPM) in your browser. TPM-JS includes the following libraries:
+  <ul>
+    <li>Intel <a href="https://github.com/tpm2-software/tpm2-tss">TPM2 Software Stack (TSS)</a>.</li>
+    <li>IBM <a href="https://sourceforge.net/projects/ibmswtpm2/">software TPM simulator</a>.</li>
+    <li>Google <a href="https://boringssl.googlesource.com/boringssl">BoringSSL</a>.</li>
+  </ul>
+</p>
+
+<p>The TSS library provides high-level APIs to the TPM. It manages TPM resources,
+  marshals command buffers and unmarshals response buffers.
+</p>
+
+<p>The simulator executes TPM commands. It maintains internal state and uses the BoringSSL
+  library for cryptographic operations.
+</p>
+
+<p>
+  <img src="images/architecture.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Architecture">
+</p>
+
+
+<blockquote>TPMs are remarkable! They are passive, low-end devices that offer <b>strong security guarantees</b>.
+</blockquote>
+<p>
+  In this site we'll learn how TPMs work. We'll see how to use the TPM as a cryptographic
+  device. We'll cover topics such as key generation, measured boot, PCRs, remote
+  attestation and key sealing.
+</p>
+          <nav>
+            <ul class="pager">
+                             <li><a href="#pg_introduction" data-value="pg_introduction">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_introduction
+             class="page"
+              style="display: none;">
+          <h2>Introduction</h2>
+<p>TPM is a discrete device soldered on the motherboard. It is a cheap (costs less
+  than a dollar to manufacture), <b>low-end device</b> that communicates with the
+  main CPU over a <b>slow, low-bandwidth</b> channel.
+</p>
+<p>
+  TPM is a <b>passive</b> device: it doesn't monitor the system and it can't halt
+  CPU execution. For it to work, it must be fed data.
+</p>
+<p>
+  TPM has <b>limited storage</b> for runtime state and persistent data: its non-volatile
+  storage is about 64KB in size. TPM can only hold a limited number of objects
+  at the same time. For this reason, a dedicated software layer on the host (resource
+  manager) loads and unloads session objects at runtime.
+</p>
+<p>
+  TPM command execution is single-threaded: it executes <b>one command at a time</b>.
+  Commands cannot be queued or batched together - each command must wait for the
+  currently running command to finish. Note that command execution can be canceled.
+</p>
+<hr>
+<p>
+  Despite these unfavorable conditions, the TPM is designed to support critical security
+  workflows. TPMs support two main use-cases: <i>secure key generation</i> and
+  <i>remote system attestation</i>.
+</p>
+<h3>Secure Key Generation</h3>
+<p>
+  TPM is a cryptographic device. It can securely generate new cryptographic keys:
+  the keys are only available to the TPM - private key material <b>never leaves</b>  the device in plain form.
+  <br>TPM can do crypto operations such as encryption and signing. TPM can certify
+  new keys, so in a way a TPM acts as a certificate authority (CA). Trust in these
+  keys is rooted in a primary key provisioned by the manufacturer or the owner
+  of the TPM.
+</p>
+
+<h3>Remote System Attestation</h3>
+<p>
+  TPM can capture the host system state: this is done by storing a sequence of measurements
+  in a special set of registers called Platform Configuration Registers (PCRs).
+  The TPM can later report its PCR values to a remote party. It is done in a secure
+  way such that the remote attester can verify the report is fresh, genuine, and
+  has not been tampered with.
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_welcome" data-value="pg_welcome">Previous</a></li>
+                             <li><a href="#pg_properties" data-value="pg_properties">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_properties
+             class="page"
+              style="display: none;">
+          <h2>TPM Properties</h2>
+
+<p>
+  TPM properties can be queried using the <code>TPM2_CC_GetCapability</code> command
+  with <code>TPM2_CAP_TPM_PROPERTIES</code> argument.
+</p>
+
+<p>
+  The following snippet reads the TPM specification level (<i>1.46</i>) and the
+  manufacturer id (<i>"IBM "</i>).
+
+  <br>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">  app.GetTpmProperties();</pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  To test whether a particular algorithm is implemented by the TPM, use the <code>TPM2_CC_TestParms</code>  command.
+</p>
+
+<p>
+  The following snippet calls <code>TPM2_CC_TestParms</code> with <code>TPM2_ALG_HMAC</code>  and different hash algorithms. <i>SHA1</i>, <i>SHA256</i> are both implemented
+  by the TPM.
+  <i>SHA512</i>, however, is not.
+
+  <br>
+<div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  assert(app.TestHashParam(TPM2_ALG_SHA1) == TPM2_RC_SUCCESS, &#39;SHA1 is implemented&#39;);
+  assert(app.TestHashParam(TPM2_ALG_SHA256) == TPM2_RC_SUCCESS, &#39;SHA256 is implemented&#39;);
+  assert(app.TestHashParam(TPM2_ALG_SHA512) != TPM2_RC_SUCCESS, &#39;SHA512 is not implemented&#39;);
+  print(&#39;OK&#39;);
+</pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_introduction" data-value="pg_introduction">Previous</a></li>
+                             <li><a href="#pg_random" data-value="pg_random">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_random
+             class="page"
+              style="display: none;">
+          <h2>Random Bytes</h2>
+
+<p>
+  As a dedicated cryptographic device, the TPM can generate secure random data. Use
+  <code>TPM2_CC_GetRandom</code> to generate random bytes.
+
+  <br>
+<div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  app.GetRandom(10);
+</pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  Note that a single call can generate at most 48 bytes, the size of the largest
+  hash digest implemented by the TPM (<i>TPM2_ALG_SHA384</i> in this case).
+
+  <br>
+<div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  assert(app.GetRandom(100).length == 48, &#39;Max number of random bytes&#39;);
+  print(&#39;OK&#39;);
+</pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+
+  <br><div class="alert alert-info" role="alert">
+    Random data is a critical building block of cryptographic systems. The TPM uses
+    its pool of random data to generate symmetric and asymmetric key material.
+  </div>
+
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_properties" data-value="pg_properties">Previous</a></li>
+                             <li><a href="#pg_keys" data-value="pg_keys">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_keys
+             class="page"
+              style="display: none;">
+          <h2>Cryptographic Keys</h2>
+
+<p>
+  TPM generates <b>strong</b>, <b>secure</b> cryptographic keys. Strong in the
+  sense that the key is derived from true random source and large key space. In
+  case of 3DES, TPM also checks that keys are not known weak keys. Secure in the
+  sense that the private key material never leaves the TPM secure boundary in plain
+  form. When a key leaves the TPM - in order to be loaded and used later - it is
+  <b>wrapped</b> (<b>encrypted</b>) by its parent key.
+  <br> Keys, therefore, form a <b>tree</b>: each key is wrapped by its parent,
+  all the way to the root of the tree, where the <b>primary key</b> is derived
+  from a fixed <b>seed</b>. The seed is stored in the TPM's NVDATA, under a reserved
+  index, and cannot be read externally.
+</p>
+
+<p>
+  <img src="images/key_tree.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Key Tree">
+</p>
+
+<h3>Key Hierarchies</h3>
+<p>
+  The TPM stores keys on one of four hierarchies:
+  <ol>
+    <li>Endorsement hierarchy.</li>
+    <li>Platform hierarchy.</li>
+    <li>Owner hierarchy, also known as storage hierarchy.</li>
+    <li>Null hierarchy.</li>
+  </ol>
+  A hierarchy is a logical collection of entities: keys and nv data blobs. Each hierarchy
+  has a <b>different seed</b> and <b>different authorization policy</b>. Hierarchies differ
+  by when their seeds are created and by who certifies their primary keys.
+  <br> Generally speaking, the endorsement hierarchy is reserved for objects created
+  and certified by the TPM manufacturer. The endorsement seed (eseed) is randomly
+  generated at manufacturing time and never changes during the lifetime of the
+  device. The primary endorsement key is certified by the TPM manufacturer, and
+  because its seed never changes, it can be used to identify the device. Since
+  there's only one TPM device per machine, the primary endorsement key can also
+  be used as the machine's identity.
+  <br> The platform hierarchy is reserved for objects created and certified by
+  the OEM that builds the host platform. The platform seed (pseed) is randomly
+  generated at manufacturing time, but can be changed by the OEM by calling <code>TPM2_CC_ChangePPS</code>.
+  <br> The owner hierarchy is reserved for us - the primary users of the TPM. When
+  a user takes ownership, for example, when the IT department provisions a new
+  host on the network, the owner hierarchy is reset. This is done by calling
+  <code>TPM2_CC_Clear</code>. In this critical setup step, two user keys should
+  be provisioned and certified by the owner: these form the root of trust for all
+  the keys generated on the owner hierarchy.
+  <br> The null hierarchy is reserved for ephemeral keys. The null seed is re-generated
+  each time the host reboots.
+</p>
+
+<p>
+  Let's see this in action. First, open the <i>Seeds window</i> by either clicking on
+  the <i>View</i> menu on the right, or by running the next snippet.
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">  ShowSeedsWindow(); </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br><div class="alert alert-info" role="alert">We use our direct access to the simulator in order to read the secret seed values.
+  Users cannot read these secrets in a normal setting.</div>
+
+  <br> Note the seed values. We simulate a host reset (power-off, power-on cycle) in the next snippet.
+  Note how the null seed is re-generated.
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  var before = sim.GetNullSeed();
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+  var after = sim.GetNullSeed();
+  assert(_.isEqual(before, after) == false, &#39;nseed reset on reboot&#39;);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  We clear the owner hierarchy in the next snippet. Note how the owner seed is re-generated.
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  var before = sim.GetOwnerSeed();
+  app.Clear();
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+  var after = sim.GetOwnerSeed();
+  assert(_.isEqual(before, after) == false, &#39;oseed reset on clear&#39;);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+  <br> Again, <code>TPM2_CC_Clear</code> should only be called when the user takes ownership of the TPM.
+</p>
+
+<p>
+  Finally, we simulate a manufacturer reset. Note how all the seeds are re-created.
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  var before = sim.GetEndorsementSeed();
+  sim.PowerOff();
+  sim.PowerOn();
+  sim.ManufactureReset();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+  var after = sim.GetEndorsementSeed();
+  assert(_.isEqual(before, after) == false, &#39;eseed reset on clear&#39;);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+  <br> A manufacturer reset cannot be triggered by the user. Here we use our direct
+  access to the simulator in order to invoke this function.
+</p>
+
+<h3>Primary Keys</h3>
+<p>
+  As mentioned, primary keys are derived from the primary seeds using a deterministic
+  key derivation function (KDF). More accurately, the KDF takes as input the fixed
+  seed and the key's template that describes its properties.
+</p>
+
+<p>
+  <img src="images/kdf.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="KDF">
+  <br>
+  <div class="alert alert-info" role="alert">If either the seed or the template changes, a completely different primary key
+    is created</div>
+</p>
+
+<p>
+  The template is defined in the <code>TPM2B_PUBLIC</code> structure. Important
+  fields include the <i>type</i> that describes whether this is a symmetric or
+  asymmetric key, the <i>objectAttributes</i> that describes whether the key is
+  used for encryption or signing, the <i>parameters</i> that describes the key
+  size and <i>unique</i> that is used as an entropy value.
+  <br>
+  <div class="alert alert-info" role="alert">By changing the entropy field, 
+    the TPM can generate an unlimited number of primary
+    keys of a given type (say RSA-2048).</div>
+</p>
+
+<p>
+  A primary key is created with the <code>TPM2_CC_CreatePrimary</code> command.
+  Let's create a RSA-2048 key on the OWNER hierarchy:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);</pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br>
+  <div class="alert alert-info" role="alert">TPM2_CC_CreatePrimary creates and <b>loads</b> the key to the TPM: note how the
+  object's handle is returned. The TPM can hold only a limited number (3) of objects
+  at a time. Use <code>TPM2_CC_FlushContext</code> to unload an object.</div>
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key.
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);
+  assert(pk1.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Unload primary key.
+  assert(app.FlushContext(pk1.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Create primary key with the same template. The same key is created.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);
+  assert(pk2.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Compare public key material.
+  assert(_.isEqual(pk1.rsa_public_n, pk2.rsa_public_n) == true, &#39;Keys should match&#39;);
+
+  // Unload primary key.
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> Instead of comparing the public key material (rsa_public_n which is copied
+  from out_public.publicArea.unique.rsa.buffer), we should instead compare the key's
+  name. The name, defined in <code>TPM2B_NAME</code> structure is the hash of the
+  canonical form of TPM2B_PUBLIC that describes the key's attributes, parameters
+  and public key material.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key.
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);
+  assert(pk1.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Unload primary key.
+  assert(app.FlushContext(pk1.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Create primary key with the same template. The same key is created.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);
+  assert(pk2.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Compare names.
+  assert(_.isEqual(pk1.name, pk2.name) == true, &#39;Keys should match&#39;);
+
+  // Unload primary key.
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br>
+  <div class="alert alert-info" role="alert">The name is the key's fingerprint</div>
+
+  <br>
+  The owner's seed doesn't change after a host restart, therefore, the primary key doesn't change after a restart:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key.
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);
+  assert(pk1.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Restart host.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Create primary key with the same template. The same key is created.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;hello&#39;);
+  assert(pk2.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Compare names.
+  assert(_.isEqual(pk1.name, pk2.name) == true, &#39;Keys should match&#39;);
+
+  // Unload primary key.
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+   Let's see how different keys are created if different template entropy values are used:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create keys with different entropy values.
+  var entropy1 = &#39;hello&#39;;
+  var pk1 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, entropy1);
+  assert(pk1.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  var entropy2 = &#39;world&#39;;
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, entropy2);
+  assert(pk2.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Unload keys
+  assert(app.FlushContext(pk1.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Compare keys.
+  assert(_.isEqual(pk1.name, pk2.name) == false, &#39;Keys should be different&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+   Finally, let's see how different keys are created if different seed values are used. We'll use the null hierarchy for this experiment. We'll reboot the host platform between key creation:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create keys with different seed values. This shows that null hierarchy stores ephemeral keys.
+  var pk1 = app.CreatePrimary(TPM2_RH_NULL, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(pk1.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Restart host. The null seed is re-generated.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  var pk2 = app.CreatePrimary(TPM2_RH_NULL, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(pk2.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(pk2.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Compare keys.
+  assert(_.isEqual(pk1.name, pk2.name) == false, &#39;Keys should be different&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<h3>Object Attributes</h3>
+
+<p>
+  Object attributes bitmap field is part of <code>TPM2B_PUBLIC</code>. For our
+  experiments it's important to understand the following attributes:
+  <ul>
+    <li>Decrypt (<i>TPMA_OBJECT_DECRYPT</i>). Specifies an encryption key.</li>
+    <li>Sign (<i>TPMA_OBJECT_SIGN_ENCRYPT</i>). Specifies a signing key.</li>
+    <li>Restricted (<i>TPMA_OBJECT_RESTRICTED</i>). Restricts the key to signing/encrypting
+      only internal TPM data.</li>
+  </ul>
+
+  A hierarchy can be thought of as having parent and child keys. Parent keys protect
+  its children, offering secrecy and integrity when the child key is stored outside
+  the TPM. Keys that wrap other keys are also called <em>storage keys</em>. Storage
+  keys are restricted encryption keys. They cannot be used for general decryption,
+  which could then leak the child's secrets.
+
+  <br> The ultimate parent at the top of the hierarchy is a primary key. Children
+  can be storage keys, in which case they can also be parents. Children can also
+  be non-storage keys, in which case they're leaf keys: children but never parents.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // A key must be either an encryption or a signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/0);
+  assert(key.rc == TPM2_RC_P + TPM2_RC_2 + TPM2_RC_ATTRIBUTES, &#39;CreatePrimary expected to fail&#39;);
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/0);
+  assert(key.rc == TPM2_RC_P + TPM2_RC_2 + TPM2_RC_ATTRIBUTES, &#39;CreatePrimary expected to fail&#39;);
+
+  // A restricted key cannot be used for both encryption and signing.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_P + TPM2_RC_2 + TPM2_RC_ATTRIBUTES, &#39;CreatePrimary expected to fail&#39;);
+
+  // A storage key is a restricted encryption key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Restricted signing keys are used for PCR quotes and key certificates.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // General purpose RSA signing key. This is a leaf-key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // General purpose ECC signing key. This is a leaf-key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // General purpose symmetric key for encryption/decryption. This is a leaf-key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_SYMCIPHER,/*restricted=*/0, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<h3>Child Keys</h3>
+
+<p>
+  Non primary keys are created with the <code>TPM2_CC_Create</code> command. The command
+  takes as input a handle to the parent key, and the key's TPM2B_PUBLIC template.
+
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  pk = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;&#39;);
+  key = app.Create(pk.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;Create failed&#39;);
+  assert(_.isEqual(key.parent_name, pk.name) == true, &#39;Parent name should match&#39;);
+
+  print(&#39;tpm2b_private: &#39;, StdVectorToByteArray(key.tpm2b_private));
+  print(&#39;tpm2b_public: &#39;, StdVectorToByteArray(key.tpm2b_public));
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br>
+  <div class="alert alert-info" role="alert">TPM2_CC_Create creates but doesn't load the key onto the TPM.
+    The command returns <code>TPM2B_PRIVATE</code> which is the key material wrapped (encrypted) by the
+    parent key. Use <code>TPM2_CC_Load</code> to load the key onto the TPM.</div>
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Loading a key under the same parent succeeds.
+  var loaded_key = app.Load(pk.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Loading a key under a different parent fails with TPM2_RC_INTEGRITY.
+  var pk2 = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;different&#39;);
+  var loaded2 = app.Load(pk2.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded2.rc == TPM2_RC_P + TPM2_RC_1 + TPM2_RC_INTEGRITY, &#39;Load expected to fail&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> TPM supports additional commands to create new keys: <code>TPM2_CC_CreateLoaded</code>,
+  <code>TPM2_CC_LoadExternal</code> and <code>TPM2_CC_Import</code>. We will not
+  cover them here.
+</p>
+
+<h3>Using Keys</h3>
+
+<p>
+  Now that we know how to create keys, we can use them to perform cryptographic operations like encryption and signing.
+  <br> The following snippet shows how to use a non-restricted, symmetric encryption key.
+  It uses the <code>TPMT2_CC_EncryptDecrypt</code> command.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create a symmetric encryption key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_SYMCIPHER,/*restricted=*/0, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Encrypt and decrypt a message.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.Encrypt(key.handle, message);
+  var decrypted = app.Decrypt(key.handle, encrypted);
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;Encrypted:&#39;, encrypted);
+  print(&#39;Decrypted:&#39;, decrypted);
+  print(&#39;Original :&#39;, message);
+
+  assert(_.isEqual(message, decrypted) == true, &#39;Message recovered&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> The following snippet shows how to use an asymmetric key for signing and verification.
+  It uses <code>TPMT2_CC_Sign</code> and <code>TPM2_CC_VerifySignature</code> commands.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create an asymmetric ECC signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Sign the digest of the message &#39;Hello&#39;.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_ECC, &#39;Hello&#39;);
+  assert(sign_result.rc == TPM2_RC_SUCCESS, &#39;Sign failed&#39;);
+
+  // Signature verification should pass on the original message.
+  var verify_result = app.VerifySignature(key.handle, &#39;Hello&#39;, sign_result);
+  assert(verify_result == TPM2_RC_SUCCESS, &#39;VerifySignature expected to pass&#39;);
+
+  // Signature verification should fail on a different message.
+  verify_result = app.VerifySignature(key.handle, &#39;World&#39;, sign_result);
+  assert(verify_result == TPM2_RC_SIGNATURE + TPM2_RC_P + TPM2_RC_2, &#39;VerifySignature expected to fail&#39;);
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> We can ask the TPM to sign the message, then verify the signature externally using the public key.
+  Following code uses the <a href="http://bitwiseshiftleft.github.io/sjcl/">SJCL</a> library.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create an asymmetric ECC signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Sign the digest of the message &#39;Hello&#39;.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_ECC, &#39;Hello&#39;);
+  assert(sign_result.rc == TPM2_RC_SUCCESS, &#39;Sign failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+
+  // Build sjcl ecdsa public key.
+  assert(key.ecc_curve_id == TPM2_ECC_NIST_P256, &#39;Unexpected curve id&#39;);
+  var curve = sjcl.ecc.curves.c256;
+
+  var pub_x = new sjcl.bn(key.ecc_public_x);
+  var pub_y = new sjcl.bn(key.ecc_public_y);
+  var pub = new sjcl.ecc.ecdsa.publicKey(curve,new sjcl.ecc.point(curve, pub_x, pub_y));
+
+  // Build sjcl ecdsa signature.
+  var r = new sjcl.bn(sign_result.ecdsa_r);
+  var s = new sjcl.bn(sign_result.ecdsa_s);
+  var l = sjcl.ecc.curves.c256.r.bitLength();
+  var rs = sjcl.bitArray.concat(r.toBits(l), s.toBits(l));
+
+  // Verify signature.
+  assert(pub.verify(sjcl.hash.sha256.hash(&#39;Hello&#39;), rs) == true, &#39;Signature verification failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> RSA signing works in much the same way:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create an asymmetric RSA signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Sign the digest of the message &#39;Hello&#39;.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_RSA, &#39;Hello&#39;);
+  assert(sign_result.rc == TPM2_RC_SUCCESS, &#39;Sign failed&#39;);
+
+  // Signature verification should pass on the original message.
+  var verify_result = app.VerifySignature(key.handle, &#39;Hello&#39;, sign_result);
+  assert(verify_result == TPM2_RC_SUCCESS, &#39;VerifySignature expected to pass&#39;);
+
+  // Signature verification should fail on a different message.
+  verify_result = app.VerifySignature(key.handle, &#39;World&#39;, sign_result);
+  assert(verify_result == TPM2_RC_SIGNATURE + TPM2_RC_P + TPM2_RC_2, &#39;VerifySignature expected to fail&#39;);
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> We can ask the TPM to sign the message, then verify the signature externally using the public key.
+  Following code uses the <a href="https://github.com/digitalbazaar/forge/">node-forge</a> library.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create an asymmetric RSA signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Sign the digest of the message &#39;Hello&#39;.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_RSA, &#39;Hello&#39;);
+  assert(sign_result.rc == TPM2_RC_SUCCESS, &#39;Sign failed&#39;);
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Build forge RSA public key.
+  var bn_n = new forge.jsbn.BigInteger(key.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger(&#39;10001&#39;, 16);
+  var pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Build forge signature blob.
+  var signature = ByteArrayToForgeBuffer(sign_result.rsa_ssa_sig).data;
+
+  // Compute message digest.
+  var md = forge.md.sha256.create();
+  md.update(&#39;Hello&#39;);
+
+  // Verify signature.
+  assert(pub.verify(md.digest().bytes(), signature, &#39;RSASSA-PKCS1-V1_5&#39;) == true, &#39;Signature verification failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> To encrypt and decrypt using an RSA encryption key, use the <code>TPM2_CC_RSA_Encrypt</code> and
+  <code>TPM2_CC_RSA_Decrypt</code> commands. They correctly encode the message before applying the RSA function.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create a RSA encryption key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/0, /*decrypt=*/1, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Encrypt and decrypt a message.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.RSAEncrypt(key.handle, message);
+  var decrypted = app.RSADecrypt(key.handle, encrypted);
+
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;Encrypted:&#39;, encrypted);
+  print(&#39;Decrypted:&#39;, decrypted);
+  print(&#39;Original :&#39;, message);
+
+  assert(_.isEqual(message, decrypted) == true, &#39;Message recovered&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+</p>
+
+<h3>Persistent Keys</h3>
+
+<p>
+  You may have noticed that it takes time to create asymmetric keys, especially long
+  RSA keys. To improve performance you may use <code>TPM2_CC_EvitControl</code> command:
+  it moves a key from volatile memory to nonvolatile memory so it can
+  remain loaded through power cycles.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create an asymmetric ECC signing key.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_ECC,/*restricted=*/0, /*decrypt=*/0, /*sign=*/1);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Sign the digest of the message &#39;Hello&#39; using primary handle.
+  var sign_result = app.Sign(key.handle, TPM2_ALG_ECC, &#39;Hello&#39;);
+  assert(sign_result.rc == TPM2_RC_SUCCESS, &#39;Sign failed&#39;);
+
+  // Make key persistent.
+  var phandle = 0x81000000;
+  var rc = app.EvictControl(TPM2_RH_OWNER, key.handle, phandle);
+  assert(rc == TPM2_RC_SUCCESS, &#39;EvictControl failed&#39;);
+
+  // Restart host.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Verify the signature using the persistent handle.
+  var verify_result = app.VerifySignature(phandle, &#39;Hello&#39;, sign_result);
+  assert(verify_result == TPM2_RC_SUCCESS, &#39;VerifySignature expected to pass&#39;);
+
+  // Flush the persistent key.
+  var rc = app.EvictControl(TPM2_RH_OWNER, phandle, phandle);
+  assert(rc == TPM2_RC_SUCCESS, &#39;EvictControl failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> Due to the size limitations of NVDATA only a handful of keys can be made persistent.
+  <br> You can save loaded objects with <code>TPM2_CC_ContextSave</code> and <code>TPM2_CC_ContextLoad</code>,
+  however, we'll not discuss that here.
+
+</p>
+          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_random" data-value="pg_random">Previous</a></li>
+                             <li><a href="#pg_certificates" data-value="pg_certificates">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_certificates
+             class="page"
+              style="display: none;">
+          <h2>Key Certificates And Trust</h2>
+
+<p>
+  Cryptographic keys are just numbers - by themselves they don't convey any meaning
+  of trust. Trust in cryptographic keys is gained through <a href="https://en.wikipedia.org/wiki/Public_key_certificate">public key certificates</a>.
+
+  <br> As we've seen, keys generated by the TPM are protected by their parent keys
+  - if you trust the parent key is not compromised, then you can trust all the
+  keys rooted under it. What about the <b>primary key</b>? How do you know it's
+  coming from a genuine TPM device, that's conformant to the spec? The answer is
+  the primary key certificate, issued by the TPM manufacturer.
+</p>
+
+<h3>EK Certificate</h3>
+
+<p>
+  The EK certificate certifies the primary endorsement key. It is issued by the TPM
+  vendor during manufacturing, and signed by a key that's only available to the
+  vendor. The vendor's root key certificate is usually distributed on the vendor's
+  website, where it can be downloaded over SSL.
+</p>
+
+<p>
+  EK certificate provisioning process looks like this:
+
+  <img src="images/ek_cert_1.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="EK Cert">
+
+  <br> At the end, a signed EK certificate is stored in the TPM's NVDATA.
+</p>
+
+<p>
+  The TPM user can, at any time, read the EK certificate from NVDATA, and verify
+  its signature chain:
+
+  <img src="images/ek_cert_2.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="EK Cert">
+
+  <br>
+  <div class="alert alert-info" role="alert">If the certificate is valid, and you trust the vendor - then the primary endorsement
+    key can be trusted.
+    <br>If the EK is trusted, then all the keys protected by it can be trusted.</div>
+</p>
+
+<h3>EK Template</h3>
+
+<p>
+  EK is derived from the eseed and a TPM2B_PUBLIC template. TCG defines two <b>default
+  templates</b> for EKs, one for RSA keys and one for ECC keys. If a vendor certifies
+  a key other than the default RSA-EK or ECC-EK, they have to store the template
+  used for creation and its <i>unique</i> value in NVDATA, next to the EK certificate.
+
+  <br> There are reserved NV indices for RSA-EK certificate and ECC-EK certificate.
+  There are reserved NV indices for the EK templates.
+
+</p>
+
+<h3>EK Certificate Example</h3>
+<p>
+  Let's see this in action. First, we'll create the root keys and self-signed certificate on the vendor side:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+
+  // Creates a self-signed root certificate.
+  function CreateRootCert(keys) {
+    var cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = &#39;01&#39;;
+    cert.validity.notBefore = new Date();
+    cert.validity.notAfter = new Date();
+    cert.validity.notAfter.setFullYear(cert.validity.notBefore.getFullYear() + 1);
+    var attrs = [{
+      name: &#39;commonName&#39;,
+      value: &#39;vendor.com&#39;
+    }];
+    cert.setSubject(attrs);
+    cert.setIssuer(attrs);
+    cert.setExtensions([{
+      name: &#39;basicConstraints&#39;,
+      cA: true
+    }, {
+      name: &#39;keyUsage&#39;,
+      keyCertSign: true,
+      digitalSignature: true,
+      nonRepudiation: true,
+      keyEncipherment: true,
+      dataEncipherment: true
+    }, {
+      name: &#39;subjectAltName&#39;,
+      altNames: [{
+        type: 6, // URI
+        value: &#39;http://vendor.com/webid&#39;
+      }, {
+        type: 7, // IP
+        ip: &#39;127.0.0.1&#39;
+      }]
+    }, {
+      name: &#39;subjectKeyIdentifier&#39;
+    }]);
+
+    // self-sign certificate
+    cert.sign(keys.privateKey);
+
+    return cert;
+  };
+
+  vendor_root_keys = forge.pki.rsa.generateKeyPair(2048);
+  vendor_root_cert = CreateRootCert(vendor_root_keys);
+
+  print(&#39;Vendor root cert:&#39;, forge.pki.certificateToPem(vendor_root_cert));
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  At manufacturing time, the TPM's EK certificate is provisioned and stored on the device:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key endorsement key from the default template.
+  var ek = app.CreatePrimaryEndorsementKey();
+  assert(ek.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(ek.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Build public key object from key material.
+  var bn_n = new forge.jsbn.BigInteger(ek.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger(&#39;10001&#39;, 16);
+  var ek_pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Build EK certificate.
+  var ek_cert = forge.pki.createCertificate();
+  ek_cert.publicKey = ek_pub;
+  ek_cert.setSubject([{
+    name: &#39;commonName&#39;,
+    value: &#39;example.org&#39;
+  }]);
+
+  // Sign EK cert with the vendor&#39;s root key.
+  ek_cert.setIssuer(vendor_root_cert.subject.attributes);
+  ek_cert.sign(vendor_root_keys.privateKey);
+
+  // Verify certificate.
+  assert(vendor_root_cert.verify(ek_cert) == true, &#39;Cert verification failed&#39;);
+  print(&#39;EK cert:&#39;, forge.pki.certificateToPem(ek_cert));
+
+  // Convert to DER format.
+  var der = forge.asn1.toDer(forge.pki.certificateToAsn1(ek_cert));
+
+  // Create NV index for the certificate.
+  assert(app.NvDefineSpace(EK_CERT_NV_INDEX, der.length()) == TPM2_RC_SUCCESS, &#39;NvDefineSpace failed&#39;);
+
+  // Store certificate in NV data.
+  assert(app.NvWrite(EK_CERT_NV_INDEX, StringToStdVector(der.data)) == TPM2_RC_SUCCESS, &#39;NvWrite failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> Writing data to NV storage is done with <code>TPM2_CC_NV_DefineSpace</code> and <code>TPM2_CC_NV_Write</code>.
+</p>
+
+<p>
+  At runtime, the EK certificate is read from the device, and verified against the vendor's root certificate:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key endorsement key from the default template.
+  var ek = app.CreatePrimaryEndorsementKey();
+  assert(ek.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(ek.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Build public key object from key material.
+  var bn_n = new forge.jsbn.BigInteger(ek.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger(&#39;10001&#39;, 16);
+  var ek_pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Read cert size.
+  var public_result = app.NvReadPublic(EK_CERT_NV_INDEX);
+  assert(public_result.rc == TPM2_RC_SUCCESS, &#39;NvReadPublic failed&#39;);
+
+  // Read cert buffer.
+  var read_result = app.NvRead(EK_CERT_NV_INDEX, public_result.data_size, /*offset*/0);
+  assert(read_result.rc == TPM2_RC_SUCCESS, &#39;NvRead failed&#39;);
+  var der = ByteArrayToForgeBuffer(read_result.data);
+  var ek_cert = forge.pki.certificateFromAsn1(forge.asn1.fromDer(der));
+  print(&#39;EK cert:&#39;, forge.pki.certificateToPem(ek_cert));
+
+  // Verify certificate&#39;s public key matches EK.
+  assert(_.isEqual(ek_pub.n, ek_cert.publicKey.n), &#39;Public key does not match&#39;);
+  assert(_.isEqual(ek_pub.e, ek_cert.publicKey.e), &#39;Public key does not match&#39;);
+
+  // Verify certificate.
+  assert(vendor_root_cert.verify(ek_cert) == true, &#39;Cert verification failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> Reading data from NV storage is done with <code>TPM2_CC_NV_ReadPublic</code> and <code>TPM2_CC_NV_Read</code>.
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_keys" data-value="pg_keys">Previous</a></li>
+                             <li><a href="#pg_ownership" data-value="pg_ownership">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_ownership
+             class="page"
+              style="display: none;">
+          <h2>Ownership, SRK and AIK</h2>
+
+<p>
+  The EK protects keys on the endorsement hierarchy. It is trusted thanks to its
+  certificate. Keys on the owner hierarchy, however, cannot be trusted because
+  they're not protected by the EK.
+  <br>It is the owner's responsibility to provision and certify the primary encryption
+  key on the owner hierarchy (here, "owner" refers to the end-user of the TPM -
+  us).
+
+  <br> The Storage Rook Key (SRK), is a primary, <b>restricted encryption key</b>  on the owner hierarchy, derived from the oseed. The SRK protects keys on the
+  owner hierarchy. It is trusted because the owner certified the key while when
+  ownership.
+
+  <br> As we'll see later, having a trusted, <b>restricted signing key</b> is useful
+  for remote system attestation. It's, therefore, recommended to create and certify
+  a restricted signing key during provisioning time. This trusted signing key is
+  also called Attestation Identity Key (AIK).
+</p>
+
+<h2>Taking Ownership</h2>
+<p>
+  <br> It's good practice to perform this setup step in a <b>clean environment</b>  (OS booted from CD, host is not connected to the network).
+
+  <br> The process includes the following steps:
+
+  <ol>
+    <li>Read and <a class="self" href="#pg_certificates">validate</a> the EK certificate.
+      Proceed only if you trust the vendor.</li>
+
+    <li>Clear the owner hierarchy with <code>TPM2_CC_Clear</code>.</li>
+
+    <li>Create a primary, restricted asymmetric encryption key on the owner hierarchy
+      (
+      <code>TPM2_CC_CreatePrimary</code>).
+      <br>Call this the <em>SRK</em>.
+    </li>
+
+    <li>Certify the SRK with your enterprise CA: create a Certificate Signing Request
+      (CSR) with SRKpub, and ask your internal, trusted CA to sign it. Store the
+      certificate in NV data (<code>TPM2_CC_NV_DefineSpace</code>, <code>TPM2_CC_NV_Write</code>).
+      <br> Alternatively, you can store the SRK public key in a remote database.
+      Use this database to verify the SRK's authenticity in the future.
+    </li>
+
+    <li>Make the SRK persistent by evicting it to NVDATA (<code>TPM2_CC_EvitControl</code>).</li>
+
+    <li>Create a restricted asymmetric signing key <b>under the SRK</b> (<code>TPM2_CC_Create</code>,
+      <code>TPM2_CC_Load</code>).
+      <br>Call this the <em>AIK</em>.
+    </li>
+
+    <li>Certify the AIK with your enterprise CA: create a Certificate Signing Request
+      (CSR) with AIKpub, and ask your internal, trusted CA to sign it. Store the
+      certificate in NV data (<code>TPM2_CC_NV_DefineSpace</code>, <code>TPM2_CC_NV_Write</code>).
+      <br> Alternatively, you can store the AIK public key in a remote database.
+      Use this database to verify the AIK's authenticity in the future.
+      <br> It's possible to use the SRK-cert as root of trust for the AIK, however,
+      having an AIKcert can simplify some workflows.
+    </li>
+
+    <li>Make the AIK persistent by evicting it to NVDATA (<code>TPM2_CC_EvitControl</code>).</li>
+
+  </ol>
+
+  <br> Please note, these keys should be set as fixed (non-duplicable): use
+  <code>TPMA_OBJECT_FIXEDTPM</code> and <code>TPMA_OBJECT_FIXEDPARENT</code> in
+  the objectAttributes field in their templates.
+
+  <br>
+</p>
+<p>
+  <div class="alert alert-info" role="alert">At this point we have two trusted keys we can use: one for storage (protecting
+    other TPM keys) and one for signing TPM statements.</div>
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_certificates" data-value="pg_certificates">Previous</a></li>
+                             <li><a href="#pg_pcrs" data-value="pg_pcrs">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_pcrs
+             class="page"
+              style="display: none;">
+          <h2>PCRs</h2>
+
+<p>
+  Platform Configuration Registers (PCRs) are a set of fixed-sized registered in
+  the TPM. Unlike regular registers, PCR values cannot be set to arbitrary values.
+  The only operation they support (besides Read), is <b>Extend</b>.
+
+  <br>Thanks to extend cryptographic properties, PCR values cannot be forged. For
+  this reason, PCRs are used to efficiently <b>capture</b> the host <b>system state</b>: a
+  digest of a sequence of measurements is securely stored in the TPM's PCRs.
+</p>
+
+<h3>Extend Semantics</h3>
+<p>
+  PCRs start with an initial, well known value, usually zero. Extend takes as input
+  a digest <var>M</var>, and computes the hash of the current PCR value, concatenated
+  with the input value. The result is stored in the PCR. This is called a <b>folding-hash</b>.
+
+  <br>
+  <div class="panel panel-default">
+    <div class="panel-body">
+      <dl class="dl-horizontal">
+        <dt>On startup:</dt>
+        <dd><var>PCR</var> &larr; 0</dd>
+        <dt>On extend:</dt>
+        <dd><var>PCR</var> &larr; Hash(<var>PCR</var> || <var>M</var>)</dd>
+      </dl>
+    </div>
+  </div>
+
+  <br> Hash is a collision resistant cryptographic hash function. A PCR stores
+  a digest of a sequence of measurements. Therefore, PCR extend operation is sensitive
+  to any change in the sequence: if a single bit changes, or the order of the measurements
+  changes, the end result is a completely different hash value.
+</p>
+
+<p>
+  Let's see this in action. First, open the <i>PCRs window</i> by either clicking
+  on the <i>View</i> menu on the right, or by running the next snippet.
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint"> ShowPCRsWindow(); </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br>
+  <div class="alert alert-info" role="alert">We use our direct access to the simulator in order to read PCR values. We'll
+    later see how to read these values securely through regular TPM commands.</div>
+
+  <br> Note how PCRs are initialized to zero. Now we'll extend PCR1 with the digest
+  of the string "Hello". <code>app.ExtendPcr</code> computes the SHA256 hash of the
+  given string, and extends the given PCR with <code>TPM2_CC_PCR_Extend</code>.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Get initial PCR value.
+  var pcr = ByteArrayToForgeBuffer(sim.GetPcr(1));
+
+  // Extend PCR1 with the SHA256 digest of &#39;Hello&#39;.
+  var rc = app.ExtendPcr(/*pcr=*/1, &#39;Hello&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  // Verify PCR extend semantics.
+  var measurement = new forge.sha256.create()
+  measurement.update(&#39;Hello&#39;);
+
+  // PCR := Hash(PCR || M)
+  var extend = new forge.sha256.create()
+  extend.update(pcr.data);
+  extend.update(measurement.digest().data);
+  pcr = extend.digest();
+
+  var actual = ByteArrayToForgeBuffer(sim.GetPcr(1));
+  print(&#39;Expected: &#39;, forge.util.bytesToHex(pcr.data));
+  print(&#39;Actual  : &#39;, forge.util.bytesToHex(actual.data));
+  assert(_.isEqual(pcr.data, actual.data) == true, &#39;PCR value does not match&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br>Try running the previous cell multiple times. See how the PCR value is updated.
+
+</p>
+
+<p>
+  Folding hash computation is <b>deterministic</b>: measuring the same sequence results in the same output.
+  We restart the TPM in order to initialize the PCRs to zeros.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR1 with (the SHA256 digests) of &lt;&#39;Hello&#39;, &#39;World&#39;&gt;.
+  assert(app.ExtendPcr(/*pcr=*/1, &#39;Hello&#39;) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(/*pcr=*/1, &#39;World&#39;) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  // Grab result.
+  var result1 = ByteArrayToForgeBuffer(sim.GetPcr(1));
+
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR1 with (the SHA256 digests) of &lt;&#39;Hello&#39;, &#39;World&#39;&gt;.
+  assert(app.ExtendPcr(/*pcr=*/1, &#39;Hello&#39;) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(/*pcr=*/1, &#39;World&#39;) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  // Compare results.
+  var result2 = ByteArrayToForgeBuffer(sim.GetPcr(1));
+  assert(_.isEqual(result1.data, result2.data) == true, &#39;PCR value does not match&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  Folding hash computation is <b>sensitive</b> to changes: changing any measurement leads to a different output.
+  We restart the TPM in order to initialize the PCRs to zeros.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Sequence of measurements.
+  var M = [&#39;Hello&#39;, &#39;Awesome&#39;, &#39;World&#39;];
+
+  // Folding hash of &lt;M0, M1, M2&gt;.
+  assert(app.ExtendPcr(0, M[0]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(0, M[1]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(0, M[2]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  var result0 = ByteArrayToForgeBuffer(sim.GetPcr(0));
+
+  // Folding hash of &lt;M1, M0, M2&gt; (out of order).
+  assert(app.ExtendPcr(1, M[1]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(1, M[0]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(1, M[2]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  var result1 = ByteArrayToForgeBuffer(sim.GetPcr(1));
+
+  // Folding hash of &lt;M0, M0, M1, M2&gt; (duplicate measurement).
+  assert(app.ExtendPcr(2, M[0]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(2, M[0]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(2, M[1]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(2, M[2]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  var result2 = ByteArrayToForgeBuffer(sim.GetPcr(2));
+
+  // Folding hash of &lt;M0, M2&gt; (missing measurement).
+  assert(app.ExtendPcr(3, M[0]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  assert(app.ExtendPcr(3, M[2]) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  var result3 = ByteArrayToForgeBuffer(sim.GetPcr(3));
+
+  // All outputs should be different.
+  assert(_.uniq([result0.data, result1.data, result2.data, result3.data]).length == 4, &#39;Collision&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<h3>Reading PCR Values</h3>
+<p>
+  <div class="alert alert-warning" role="alert">There's one TPM command you should definitely <b>not</b> use: <code>TPM2_CC_PCR_Read</code>.
+    <br>The reason: it returns PCR values, but we no security guarantees. An attacker
+    can MITM your communication with the TPM, and forge arbitrary TPM2_CC_PCR_Read
+    responses.
+  </div>
+
+  <br> The correct way to read PCR values is through <b>quotes</b>. A quote is a signed
+  statement from the TPM, attesting to its internal state. Use <code>TPM2_CC_Quote</code>  to read fresh PCR values.
+  We are going to use the AIK, our trusted signing key, to sign the PCR quote.
+
+  <br> This shows how the first TPM functionality - performing secure crypto operations -
+  complements its second functionality - reporting host system state.
+</p>
+
+<p>
+  <img src="images/complement_1.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Quote Operation">
+</p>
+
+<p>
+  <div class="alert alert-info" role="alert"><code>TPM2_CC_Quote</code> also takes a nonce as input. It's important to use
+    a random nonce for each quote operation. This ensures the quote reports fresh
+    PCR values, and protects against replay attacks.
+  </div>
+</p>
+
+<h3>Quote Experiment</h3>
+<p>
+  In the following experiment we'll see how a remote party (also called "remote attester",
+  "remote verifier" or just "verifier") asks for a fresh PCR quote. The process
+  looks like this:
+</p>
+
+<p>
+  <img src="images/pcr_quote.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Quote Operation">
+</p>
+
+<p>
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Modify PCR1.
+  assert(app.ExtendPcr(/*pcr=*/1, &#39;Hello&#39;) == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  // app.Quote selects PCR0, PCR1, PCR2 and PCR3. Therefore, the expected quote
+  // is the digest of &lt;PCR0, PCR1, PCR2, PCR3&gt;
+  var expected_pcrs = new forge.sha256.create();
+  expected_pcrs.update(ByteArrayToForgeBuffer(sim.GetPcr(0)).data);
+  expected_pcrs.update(ByteArrayToForgeBuffer(sim.GetPcr(1)).data);
+  expected_pcrs.update(ByteArrayToForgeBuffer(sim.GetPcr(2)).data);
+  expected_pcrs.update(ByteArrayToForgeBuffer(sim.GetPcr(3)).data);
+
+  // Create a restricted RSA signing key.
+  // Assume this key is trusted by the remote verifier.
+  var aik = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
+  assert(aik.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Sign PCR quote with random nonce.
+  var challenge = Math.random().toString(36);
+  var quote_result = app.Quote(aik.handle, /*nonce=*/ challenge);
+  assert(quote_result.rc == TPM2_RC_SUCCESS, &#39;Quote failed&#39;);
+
+  // Unload key.
+  assert(app.FlushContext(aik.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Build forge RSA public key.
+  var bn_n = new forge.jsbn.BigInteger(aik.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger(&#39;10001&#39;, 16);
+  var pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Build forge signature blob.
+  assert(quote_result.sign_algo == TPM2_ALG_RSASSA, &#39;Unexpected sign algo&#39;);
+  assert(quote_result.hash_algo == TPM2_ALG_SHA256, &#39;Unexpected hash algo&#39;);
+  var signature = ByteArrayToForgeBuffer(quote_result.rsa_ssa_sig).data;
+
+  // Compute message digest.
+  var md = forge.md.sha256.create();
+  md.update(ByteArrayToForgeBuffer(quote_result.tpm2b_attest).data);
+
+  // Verify signature. This is done remotely.
+  assert(pub.verify(md.digest().bytes(), signature, &#39;RSASSA-PKCS1-V1_5&#39;) == true, &#39;Signature verification failed&#39;);
+
+  // Unmarshal the serialized TPMS_ATTEST buffer.
+  // This process does not require any TPM secrets, and can be done by the remote verifier.
+  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  assert(attested.rc == TPM2_RC_SUCCESS, &#39;Unmashal failed&#39;);
+
+  // Magic value indicates the quote was on internal TPM data.
+  assert(attested.magic == TPM2_GENERATED_VALUE, &#39;Expected TPM magic value&#39;);
+
+  // TPMS_ATTEST is a union of different types (ATTEST_NV, ATTEST_CERTIFY, QUOTE, ...).
+  // Verify we got a quote result back.
+  assert(attested.type == TPM2_ST_ATTEST_QUOTE, &#39;Expected ATTEST_QUOTE type&#39;);
+
+  // Extract the nonce from the tpm2b_attest buffer.
+  // It should match the random challenge that we sent. This proves the attested data is fresh.
+  var signed_nonce = ByteArrayToForgeBuffer(attested.nonce);
+  assert(_.isEqual(signed_nonce.data, challenge) == true, &#39;Nonce does not match challenge&#39;);
+
+  // Extract selected PCRs digest from the tpm2b_attest buffer.
+  // It should match the expected digest computed above.
+  var signed_pcrs = ByteArrayToForgeBuffer(attested.selected_pcr_digest);
+  assert(_.isEqual(signed_pcrs.data, expected_pcrs.digest().data) == true, &#39;PCRs dont match&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_ownership" data-value="pg_ownership">Previous</a></li>
+                             <li><a href="#pg_attestation" data-value="pg_attestation">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_attestation
+             class="page"
+              style="display: none;">
+          <h2>Measured Boot And Remote Attestation</h2>
+
+<p>
+  In the <a class="self" href="#pg_pcrs">previous</a> section we saw how PCRs efficiently
+  record a sequence of measurements. We also saw how to securely read PCR values
+  from the TPM. The last piece of the puzzle is how to get <b>meaningful measurements</b>  into the TPM.
+  <br> The solution is a standardized technology supported by modern firmwares
+  and operating systems called "measured boot".
+</p>
+
+<h3>Measured Boot</h3>
+
+<p>
+  In measured boot each element in the boot process measures its successor's code
+  and data regions before handing off execution to that element. Measured boot
+  proves the <b>integrity state</b> of the host platform: a compromised OS will
+  be detected because a malicious boot element (bootkit / rootkit) is measured
+  before it has a chance to modify the system.
+</p>
+
+<p>
+  <br>For our discussion we'll simplify the boot process to have only three components:
+  firmware &rarr; bootloader &rarr; kernel.
+</p>
+
+<p>
+  <img src="images/measured_boot.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Measured Boot">
+</p>
+
+<p>
+  Measured boot as depicted above raises the following questions:
+  <ol>
+    <li>Who measures the firmware? Or generally, how do we trust the firmware?</li>
+    <li>TPM concisely records the host state: it stores a folding hash of all measurements.
+      How do we interpret it? How do we know what was measured?</li>
+  </ol>
+
+  <br>There are two general answers to the first question. The first, you trust
+  the firmware. The firmware measures it self into PCR0. Firmware vendors are expected
+  to publish their "good know" measurements for firmware blobs they distribute.
+  Using these, one can verify a good firmware was loaded. The second answer involves
+  an <b>immutable</b> code component called Core Root of Trust for Measurement
+  (CRTM). It is the first piece of code that executes on the main processor during
+  the boot process. It measures the firmware blob before passing executing to it.
+</p>
+
+<p>
+  <br>The answer to the second question is PCR numbers and the boot event log.
+  Remember that we have a (limited) number of PCRs at our disposal. Instead of
+  measuring everything to a single PCR, measured boot measures different things
+  to different PCRs. For instance, the firmware is measured into PCR0. The disk
+  layout is measured into PCR5 and the boot loader is measured into PCR4. This
+  provides a crude way to figure out what component of the system changed during
+  boot. The second way to interpret PCR values is via the boot event log, which
+  we'll discuss next.
+
+</p>
+
+
+<h3>Event Log</h3>
+
+<p>
+  The boot event log provides <b>context</b> for measurements. The log details
+  each measurement sent to the TPM. It's maintained by the firmware, bootloader
+  and later the OS. Users can query the OS for its boot event log, and read what
+  components were measured during boot.
+</p>
+
+<p>
+  <img src="images/event_log.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Measured Boot With Event Log">
+</p>
+
+<p>
+  <br>A simplified event log might look like:
+  <pre>
+    Fimware blob "firmware.bin", PCR8, digest=0x11223344.
+    Boot app "/EFI/Windows/Bootloader.efi", PCR8, digest=0x55667788.
+    Kernel image "c:\Windows\ntoskrnl.exe", PCR8, digest=0x99AABBCC.</pre>
+
+  <br>To <b>validate</b> the event log's integrity, you should <b>playback</b>  the digests extended into a PCR. Then, read (quote) the actual PCR value from
+  the TPM, and compare it with the expected value from the log. If they match,
+  the event log's integrity is valid, and therefore, can be trusted.
+</p>
+
+<h3>Remote Attestation Protocol</h3>
+<p>
+  Remote attestation (RA) protocol combines all that we've learned: it lets a remote
+  party query the integrity state of a target host, without assuming any trust
+  on that host.
+  <br> In RA, the remote attester reads the boot event log and a fresh PCR quote.
+  It validates the event log's integrity by comparing the actual PCR values to
+  the expected ones from the log. It then evaluates the integrity state of the
+  host: do we trust this particular firmware that was loaded? This particular boot
+  loader and OS kernel? It can also set a policy around these measurements, and
+  enforce, for instance, that an up-to-date kernel is running.
+
+  <br> A compromised host will be detected. An attacker can deny access to the
+  TPM or to the boot event log, but this denial of service will result in an untrusted host.
+</p>
+
+<p>
+  <img src="images/remote_attestation.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Remote Attestation">
+</p>
+
+<p>
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Simulate measured boot.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  var boot_log = [];
+  function MeasureElement(description, data, pcr) {
+    // Add digest to event log.
+    var md = forge.md.sha256.create();
+    md.update(data);
+    boot_log.push({description: description, pcr: pcr, digest: md.digest().bytes()});
+    // Extend PCR with digest.
+    var rc = app.ExtendPcr(/*pcr=*/pcr, data);
+    assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+  }
+
+  // CRTM measures the firmware and passes control to it.
+  MeasureElement(&#39;Firmware ver 1234&#39;, &#39;Firmware blob&#39;, 0);
+
+  // Firmware measures the boot loader and passes control to it.
+  MeasureElement(&#39;Boot loader /EFI/boot.efi&#39;, &#39;Boot loader blob&#39;, 1);
+
+  // Boot loader measures the OS kernel and passes control to it.
+  MeasureElement(&#39;Kernel file /boot/vmlinuz-linux&#39;, &#39;Kernel blob&#39;, 1);
+
+  // Create a restricted RSA signing key.
+  // Assume this key is trusted by the remote verifier.
+  var aik = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/0, /*sign=*/1);
+  assert(aik.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Remote attester generates a random nonce.
+  // The challenge is sent to the host.
+  var challenge = Math.random().toString(36);
+
+  // Sign PCR quote with random nonce.
+  var quote_result = app.Quote(aik.handle, /*nonce=*/ challenge);
+  assert(quote_result.rc == TPM2_RC_SUCCESS, &#39;Quote failed&#39;);
+
+  // Unload key.
+  assert(app.FlushContext(aik.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Build forge RSA public key.
+  var bn_n = new forge.jsbn.BigInteger(aik.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger(&#39;10001&#39;, 16);
+  var pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+
+  // Build forge signature blob.
+  assert(quote_result.sign_algo == TPM2_ALG_RSASSA, &#39;Unexpected sign algo&#39;);
+  assert(quote_result.hash_algo == TPM2_ALG_SHA256, &#39;Unexpected hash algo&#39;);
+  var signature = ByteArrayToForgeBuffer(quote_result.rsa_ssa_sig).data;
+
+  // Compute message digest.
+  var md = forge.md.sha256.create();
+  md.update(ByteArrayToForgeBuffer(quote_result.tpm2b_attest).data);
+
+  // Remote attester verifies signature.
+  assert(pub.verify(md.digest().bytes(), signature, &#39;RSASSA-PKCS1-V1_5&#39;) == true, &#39;Signature verification failed&#39;);
+
+  // Unmarshal the serialized TPMS_ATTEST buffer.
+  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  assert(attested.rc == TPM2_RC_SUCCESS, &#39;Unmashal failed&#39;);
+
+  // Extract the nonce from the tpm2b_attest buffer.
+  // It should match the random challenge that we sent. This proves the attested data is fresh.
+  var signed_nonce = ByteArrayToForgeBuffer(attested.nonce);
+  assert(_.isEqual(signed_nonce.data, challenge) == true, &#39;Nonce does not match challenge&#39;);
+
+  // Playback digests from boot_log.
+  var pcrs = [forge.util.hexToBytes(&#39;0000000000000000000000000000000000000000000000000000000000000000&#39;),
+              forge.util.hexToBytes(&#39;0000000000000000000000000000000000000000000000000000000000000000&#39;),
+              forge.util.hexToBytes(&#39;0000000000000000000000000000000000000000000000000000000000000000&#39;),
+              forge.util.hexToBytes(&#39;0000000000000000000000000000000000000000000000000000000000000000&#39;)];
+  for (var i in boot_log) {
+    // PCR := Hash(PCR || M)
+    var extend = new forge.sha256.create();
+    extend.update(pcrs[boot_log[i].pcr]);
+    extend.update(boot_log[i].digest);
+    pcrs[boot_log[i].pcr] = extend.digest().bytes();
+  }
+
+  // app.Quote selects PCR0, PCR1, PCR2 and PCR3. Therefore, the expected quote
+  // is the digest of &lt;PCR0, PCR1, PCR2, PCR3&gt;.
+  var expected_pcrs = new forge.sha256.create();
+  expected_pcrs.update(pcrs[0]);
+  expected_pcrs.update(pcrs[1]);
+  expected_pcrs.update(pcrs[2]);
+  expected_pcrs.update(pcrs[3]);
+
+  // Extract selected PCRs digest from the tpm2b_attest buffer.
+  // It should match the expected digest computed above.
+  var signed_pcrs = ByteArrayToForgeBuffer(attested.selected_pcr_digest);
+  assert(_.isEqual(signed_pcrs.data, expected_pcrs.digest().data) == true, &#39;PCRs dont match&#39;);
+
+  // Boot log&#39;s integrity is verified. Its contents can be used for host integrity evaluation.
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_pcrs" data-value="pg_pcrs">Previous</a></li>
+                             <li><a href="#pg_authorization" data-value="pg_authorization">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_authorization
+             class="page"
+              style="display: none;">
+          <h2>Authorization</h2>
+<p>
+  Communication with the TPM device is done over Memory Mapped IO (MMIO): a region
+  of physical memory is reserved for sending and receiving data from the TPM. This
+  means that any (privileged) code on the host can interact with the TPM. To protect
+  against unwanted use, the TPM lets users and administrators set authorization
+  policies. With this policy in place, only users with the right authorization
+  token can use TPM entities like keys and NV indices.
+  <br>The TPM supports many authorization schemes. In this lesson we'll work with
+  simple password authorization scheme.
+</p>
+
+<h3>Hierarchy Authorization</h3>
+<p>
+  Use <code>TPM2_CC_HierarchyChangeAuth</code> command to set a hierarchy
+  wide authorization value:
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+
+  // Set owner authorization string.
+  var rc = app.HierarchyChangeAuth(TPM2_RH_OWNER, &#39;secret-password&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;HierarchyChangeAuth failed&#39;);
+
+  // Creating a key in this hierarchy without specifying the authz string
+  // fails with TPM2_RC_BAD_AUTH.
+  var key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_BAD_AUTH, &#39;CreatePrimary expected to fail&#39;);
+
+  // Creating a key with the wrong authz string also fails with TPM2_RC_BAD_AUTH.
+  app.SetAuthPassword(&#39;bad-password&#39;);
+  key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_BAD_AUTH, &#39;CreatePrimary expected to fail&#39;);
+
+  // It&#39;s impossible to reset the hierarchy&#39;s auth without the right password.
+  var rc = app.HierarchyChangeAuth(TPM2_RH_OWNER, &#39;new-password&#39;);
+  assert(rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_BAD_AUTH, &#39;HierarchyChangeAuth expected to fail&#39;);
+
+  // Creating a key with the correct authz string succeeds.
+  app.SetAuthPassword(&#39;secret-password&#39;);
+  key = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Unload key.
+  assert(app.FlushContext(key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Clear authz.
+  assert(app.HierarchyChangeAuth(TPM2_RH_OWNER,&#39;&#39;) == TPM2_RC_SUCCESS, &#39;HierarchyChangeAuth failed&#39;);
+  app.SetAuthPassword(&#39;&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  It's important to note a few things. First, the password authorization string is
+  transmitted in the clear. Look at the (verbose) debug logs on the right, you'll
+  see the string "secret-password" passed in the clear at the beginning of the
+  command. Second, <code>app.SetAuthPassword()</code> doesn't invoke a TPM command.
+  This function changes the internal state of the TSS: it sets the <code>TPM2L_SYS_AUTH_COMMAND</code>  <code>sessions_data_.auths[0].hmac.buffer</code> value to the given password
+  string. It later prepends this value to all (authenticated) TPM commands like
+  <code>TPM2_CC_CreatePrimary</code>.
+
+</p>
+
+<p>
+  <div class="alert alert-info" role="alert">A common practice is to set the owner hierarchy's auth value to a random string
+    during <a class="self" href="#pg_ownership">provisioning</a>. It protects keys
+    on this hierarchy against unwanted use.
+  </div>
+</p>
+
+<h3>Key Authorization</h3>
+<p>
+  In addition to hierarchy authorization, TPM supports individual key authorization.
+  <br>To add key authorization, set the <code>TPMA_OBJECT_USERWITHAUTH</code> bit
+  in <code>TPM2B_PUBLIC</code> objectAttributes field and the sensitive.userAuth
+  field in <code>TPM2B_SENSITIVE_CREATE</code> structure.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key with authorization password.
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;&#39;,
+                                  /*user_auth=*/&#39;secret-password&#39;);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Authz value is verified when someone tries to USE the key, for instance,
+  // when someone tries to create a child key under it.
+  app.SetAuthPassword(&#39;bad-password&#39;);
+  var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_AUTH_FAIL, &#39;Create expected to fail&#39;);
+
+  // With the correct authz value, app.Create succeeds.
+  app.SetAuthPassword(&#39;secret-password&#39;);
+  var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;Create failed&#39;);
+
+  // Unload key.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Clear session authz.
+  app.SetAuthPassword(&#39;&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> Child keys can be protected in a similar way:
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create regular primary key.
+  var pk = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                             /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(pk.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Create a child key with user-auth value.
+  var key = app.Create(pk.handle, TPM2_ALG_RSA,
+                       /*restricted=*/0, /*decrypt=*/1, /*sign=*/1,
+                       /*user_auth=*/&#39;secret-password&#39;);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;Create failed&#39;);
+
+  // Load succeeds because the parent does not require authorization.
+  var loaded_key = app.Load(pk.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+
+  // Encrypt works without authorization because it&#39;s not an authenticated command
+  // (anyone can use the public key to encrypt data).
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.RSAEncrypt(loaded_key.handle, message);
+
+  // Decrypt requires authorization.
+  app.SetAuthPassword(&#39;secret-password&#39;);
+  var decrypted = app.RSADecrypt(loaded_key.handle, encrypted);
+  assert(_.isEqual(message, decrypted) == true, &#39;Message recovered&#39;);
+
+  // Unload keys.
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(pk.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Clear session authz.
+  app.SetAuthPassword(&#39;&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+</p>
+
+<h3>Dictionary Attack Protection and Lockout Mode</h3>
+<p>
+  When a wrong password is used for more than 3 attempts, the TPM enters a <b>locked-out</b> mode.
+  This feature protects keys against a <a href="https://en.wikipedia.org/wiki/Dictionary_attack">dictionary attack</a> (DA).
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key with authorization password.
+  primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                              /*restricted=*/1, /*decrypt=*/1, /*sign=*/0, /*unique=*/&#39;&#39;,
+                              /*user_auth=*/&#39;secret-password&#39;);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Create a child key with the wrong password.
+  // It will fail, and put the TPM in lock-out mode.
+  for (var i=0; i&lt;3; i++) {
+    app.SetAuthPassword(&#39;password-guess&#39; + i);
+    var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+    if (key.rc == TPM2_RC_LOCKOUT) {
+      // We might enter lockout before 3 failures because the cells above
+      // may also increment the failed tries counter.
+      break;
+    }
+    assert(key.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_AUTH_FAIL, &#39;Create expected to fail&#39;);
+  }
+
+  app.SetAuthPassword(&#39;password-guess4&#39;);
+  key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_LOCKOUT, &#39;Create expected to fail&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+  <br> <div class="alert alert-warning" role="alert">The TPM will not accept any command for the target object
+    while in lock-out mode. The TPM will self-heal after a pre-define amount of time - 10 seconds in our lab.</div>
+
+  <br> Run the following cell after <b>waiting for at least ten seconds</b>.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create a key with the correct password.
+  // After the TPM recovers from its lock-out mode (10 seconds in our lab), it will
+  // successfully create the key.
+  app.SetAuthPassword(&#39;secret-password&#39;);
+  var key = app.Create(primary.handle, TPM2_ALG_RSA,/*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;Create failed. Try re-running this cell in 10 seconds&#39;);
+
+  // Unload primary.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Clear session authz.
+  app.SetAuthPassword(&#39;&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+</p>
+
+<h3>Password Protected Data Blobs</h3>
+<p>
+  <code>TPM2B_SENSITIVE_CREATE</code> has another field for storing data blobs.
+  Use this with a <code>TPM2_ALG_KEYEDHASH</code> key to protect a data blob with
+  a password. The data blob will be returned via <code>TPM2_CC_Unseal</code> command,
+  only if the user has the correct authorization value.
+
+  <br> <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create KEYEDHASH key.
+  // Note how restricted = decrypt = sign = 0.
+  // Note how we set the auth value and the sensitive data.
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_KEYEDHASH,
+                              /*restricted=*/0, /*decrypt=*/0, /*sign=*/0, /*unique=*/&#39;&#39;,
+                              /*user_auth=*/&#39;secret-password&#39;,
+                              /*sensitive_data=*/&#39;secret-data-blob&#39;);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Unsealing the data with the wrong password fails.
+  app.SetAuthPassword(&#39;wrong-password&#39;);
+  var unsealed = app.Unseal(primary.handle);
+  assert(unsealed.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_AUTH_FAIL, &#39;Unseal expected to fail&#39;);
+
+  // Unsealing the data with the correct password succeeds.
+  app.SetAuthPassword(&#39;secret-password&#39;);
+  unsealed = app.Unseal(primary.handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, &#39;Unseal failed&#39;);
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  assert(_.isEqual(unsealed_data, &#39;secret-data-blob&#39;), &#39;Sensitive data does not match&#39;);
+
+  // Unload primary.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Clear session authz.
+  app.SetAuthPassword(&#39;&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_attestation" data-value="pg_attestation">Previous</a></li>
+                             <li><a href="#pg_sealing" data-value="pg_sealing">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_sealing
+             class="page"
+              style="display: none;">
+          <h2>Sealing Data and Keys</h2>
+
+In this lesson we'll see how the TPM can seal secrets (data blobs or cryptographic
+keys) to the host system state as captured in its PCR values. We'll introduce a
+new concept - session authorization - which naturally extends concepts from the
+previous lesson on authorization.
+
+<h3>Session Authorization</h3>
+<p>
+A session is an internal TPM object that encodes an authorization value.
+Until now we've been implicitly using the <code>TPM2_RS_PW</code> session handle to
+authorize commands with either an empty or a user defined password.
+</p>
+
+<h4>Trial Session</h4>
+<p>
+The mechanics of using a session is as follows. First, we create a <b>trial</b> session object
+with <code>TPM2_StartAuthSession</code> command. A trial session accepts user defined PCR values
+in <code>TPM2_PolicyPCR</code> command. This command updates a folding hash field in the session
+object called <i>policy_digest</i>. The policy digest value can be read through <code>TPM2_PolicyGetDigest</code>.
+Finally, we plug the policy digest into <code>publicArea.authPolicy</code> field in <code>TPM2B_PUBLIC</code>
+passed to <code>TPM2_CreatePrimary</code> or <code>TPM2_Create</code>.
+<br>The authPolicy field protects the key object: any authorized command that uses the key must include a handle
+to a session with the expected auth digest. We'll see how it works in the following sections.
+</p>
+<p>
+Calculating the authPolicy digest using a trial session is summarized in the following diagram:
+</p>
+
+<p>
+  <img src="images/trial_session.svg" class="img-responsive center-block" style="max-width:90%"
+    alt="Trial Session">
+</p>
+<p>
+  <div class="alert alert-info" role="alert">A trial session doesn't include any secrets, it's, therefore, possible
+    to compute the expected authPolicy digest offline, without a TPM. </div>
+</p>
+
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Start trial session.
+  var trial = app.StartAuthSession(/*trial=*/true);
+  assert(trial.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+
+  // Initial digest is all zeros.
+  var policy_digest = app.PolicyGetDigest(trial.handle);
+  assert(_.isEqual(policy_digest, [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]), &#39;Init policy&#39;);
+
+  // Update policy with dummy digest.
+  var rc = app.PolicyPCR(trial.handle, StringToStdVector(&#39;test&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+
+  // Policy digest is updated deterministically.
+  var policy_digest = app.PolicyGetDigest(trial.handle);
+  assert(_.isEqual(policy_digest.slice(0, 5), [240,178,156,111,19]), &#39;Policy updated&#39;);
+
+  // Unload session.
+  assert(app.FlushContext(trial.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<h4>Policy Session</h4>
+<p>
+Once a key is protected with authPolicy, it can only be used with a session that encodes the expected
+auth digest. Like before, we create a new session object using <code>TPM2_StartAuthSession</code>, only
+this time we create a <code>TPM2_SE_POLICY</code> session and not a <code>TPM2_SE_TRIAL</code> session.
+<br>A call to <code>TPM2_PolicyPCR</code> hashes the contents of the <b>actual</b> PCR values into the
+session policy_digest field. Finally, when we call <code>TPM2_Unseal</code>, the TPM evaluates the
+session's policy digest and compares it against the key's expected authPolicy digest. If they match,
+the sealed data is returned to the user, otherwise, it fails with an error.
+</p>
+
+<p>
+Policy session with good (expected) PCR values:
+</p>
+
+<p>
+  <img src="images/policy_session_good.svg" class="img-responsive center-block" style="max-width:90%"
+    alt="Trial Session">
+</p>
+
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a good value.
+  var rc = app.ExtendPcr(0, &#39;Hello&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with &#39;Hello&#39;.
+  var auth_policy = forge.util.hexToBytes(&#39;e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a&#39;);
+
+  // Seal data using auth_policy.
+  var key = app.Create(primary.handle, TPM2_ALG_KEYEDHASH, /*restricted=*/0, /*decrypt=*/0, /*sign=*/0,
+                       /*user_auth=*/&#39;&#39;, /*sensitive_data=*/&#39;secret-data-blob&#39;,
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  var loaded_key = app.Load(primary.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(&#39;&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+
+  // Unseal succeeds because PCR values match:
+  // session policy digest == key auth policy digest.
+  var unsealed = app.Unseal(loaded_key.handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, &#39;Unseal failed&#39;);
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  assert(_.isEqual(unsealed_data, &#39;secret-data-blob&#39;), &#39;Sensitive data does not match&#39;);
+
+  // Unload session and keys.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+Policy session with bad (unexpected) PCR values:
+</p>
+<p>
+  <img src="images/policy_session_bad.svg" class="img-responsive center-block" style="max-width:90%"
+    alt="Trial Session">
+</p>
+
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a bad value.
+  var rc = app.ExtendPcr(0, &#39;Goodbye&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with &#39;Hello&#39;.
+  var auth_policy = forge.util.hexToBytes(&#39;e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a&#39;);
+
+  // Seal data using auth_policy.
+  var key = app.Create(primary.handle, TPM2_ALG_KEYEDHASH, /*restricted=*/0, /*decrypt=*/0, /*sign=*/0,
+                       /*user_auth=*/&#39;&#39;, /*sensitive_data=*/&#39;secret-data-blob&#39;,
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  var loaded_key = app.Load(primary.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(&#39;&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+
+  // Unseal fails because PCR values do not match:
+  // session policy digest != key auth policy digest.
+  var unsealed = app.Unseal(loaded_key.handle);
+  assert(unsealed.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_POLICY_FAIL, &#39;Unseal expected to fail&#39;);
+
+  // Unload session and keys.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+<div class="alert alert-info" role="alert">Note that UserWithAuth bit in the object attributes struct
+  should be cleared when calling <code>TPM2_Create</code> with an auth_policy. This makes the policy
+  mandatory.</div>
+</p>
+
+<h3>Sealing Keys</h3>
+<p>
+  Previously we saw how keys protect PCR reports, now we'll see how PCRs protect
+  keys. The two main functionalities provided by the TPM complement each other:
+</p>
+
+<p>
+  <img src="images/complement_2.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Seal Operation">
+</p>
+
+<p>
+  To seal a data blob we've used a <code>TPM2_ALG_KEYEDHASH</code> key with authPolicy.
+  To seal a key, we're going to use a <code>TPM2_ALG_SYMCIPHER</code> key with authPolicy. Encryption/decryption
+  operations with this key are protected by a policy session.
+
+  <br><div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a good value.
+  var rc = app.ExtendPcr(0, &#39;Hello&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with &#39;Hello&#39;.
+  var auth_policy = forge.util.hexToBytes(&#39;e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a&#39;);
+
+  // symmetric encryption key with auth policy.
+  var key = app.Create(primary.handle, TPM2_ALG_SYMCIPHER,
+                       /*restricted=*/0, /*decrypt=*/1, /*sign=*/1,
+                       /*user_auth=*/&#39;&#39;, /*sensitive_data=*/&#39;&#39;,
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  assert(key.rc == TPM2_RC_SUCCESS, &#39;Create failed&#39;);
+
+  var loaded_key = app.Load(primary.handle, key.tpm2b_private, key.tpm2b_public);
+  assert(loaded_key.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Encrypt and decrypt a message.
+  // We need to call PolicyPCR before each command, because the session
+  // policy digest is reset after each command.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(&#39;&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+  var encrypted = app.Encrypt(loaded_key.handle, message);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(&#39;&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+  var decrypted = app.Decrypt(loaded_key.handle, encrypted);
+  assert(_.isEqual(message, decrypted) == true, &#39;Message recovered&#39;);
+
+  // Unload session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Unload keys.
+  assert(app.FlushContext(loaded_key.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<h3>Protecting Keys With A Sealed Password</h3>
+<p>
+  A common practice is to protect keys with a randomly generated password, then seal that
+  password data blob to PCR values. This scheme has the advantage of having an easy, password less
+  access to the key when the host is in a good know state. Additionally, by storing the password
+  offline, the user has a recovery solution: access to the key is always granted when the password
+  is entered manually.
+  <br>We'll build on examples from the previous sections on authorization and sealing.
+
+  <br><div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Randomly generated password.
+  var password = forge.util.bytesToHex(ByteArrayToForgeBuffer(app.GetRandom(10)));
+
+  var primary = app.CreatePrimary(TPM2_RH_OWNER, TPM2_ALG_RSA,
+                                  /*restricted=*/1, /*decrypt=*/1, /*sign=*/0);
+  assert(primary.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Auth policy digest of expected PCRs calculated using a trial session.
+  // Policy encodes a digest of PCRs 0-4, after PCR0 was extended with &#39;Hello&#39;.
+  var auth_policy = forge.util.hexToBytes(&#39;e1b96d2d29dda5528754144d903dc0a3fc79a5ea54f98adac3dea20e0fdf4e2a&#39;);
+
+  // key1 protects the password with an auth policy.
+  var key1 = app.Create(primary.handle, TPM2_ALG_KEYEDHASH, /*restricted=*/0, /*decrypt=*/0, /*sign=*/0,
+                       /*user_auth=*/&#39;&#39;, /*sensitive_data=*/password,
+                       /*auth_policy=*/StringToStdVector(auth_policy));
+  assert(key1.rc == TPM2_RC_SUCCESS, &#39;Create failed&#39;);
+
+  // Make key1 persistent.
+  var key1_handle = 0x81000000;
+  var loaded_key1 = app.Load(primary.handle, key1.tpm2b_private, key1.tpm2b_public);
+  assert(loaded_key1.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+  var rc = app.EvictControl(TPM2_RH_OWNER, loaded_key1.handle, key1_handle);
+  assert(rc == TPM2_RC_SUCCESS, &#39;EvictControl failed&#39;);
+
+  // key2 is a password-protected symmetric encryption key.
+  var key2 = app.Create(primary.handle, TPM2_ALG_SYMCIPHER,
+                       /*restricted=*/0, /*decrypt=*/1, /*sign=*/1,
+                       /*user_auth=*/password);
+  assert(key2.rc == TPM2_RC_SUCCESS, &#39;Create failed&#39;);
+
+  // Make key2 persistent.
+  var key2_handle = 0x81000001;
+  var loaded_key2 = app.Load(primary.handle, key2.tpm2b_private, key2.tpm2b_public);
+  assert(loaded_key2.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+  var rc = app.EvictControl(TPM2_RH_OWNER, loaded_key2.handle, key2_handle);
+  assert(rc == TPM2_RC_SUCCESS, &#39;EvictControl failed&#39;);
+
+  // Unload primary.
+  assert(app.FlushContext(primary.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a bad value.
+  var rc = app.ExtendPcr(0, &#39;Goodbye&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(&#39;&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+
+  // Unseal fails because PCR values do not match:
+  // session policy digest != key auth policy digest.
+  var unsealed = app.Unseal(key1_handle);
+  assert(unsealed.rc == TPM2_RC_1 + TPM2_RC_S + TPM2_RC_POLICY_FAIL, &#39;Unseal expected to fail&#39;);
+
+  // Unload session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Restart host to reset PCRs.
+  app.Shutdown();
+  sim.PowerOff();
+  sim.PowerOn();
+  app.Startup();
+
+  // Extend PCR with a good value.
+  var rc = app.ExtendPcr(0, &#39;Hello&#39;);
+  assert(rc == TPM2_RC_SUCCESS, &#39;ExtendPcr failed&#39;);
+
+  // Start policy session.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Encode actual PCR values into session object.
+  var rc = app.PolicyPCR(session.handle, StringToStdVector(&#39;&#39;));
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicyPCR failed&#39;);
+
+  // Unseal succeeds because PCR values match:
+  // session policy digest == key auth policy digest.
+  var unsealed = app.Unseal(key1_handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, &#39;Unseal failed&#39;);
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  assert(_.isEqual(unsealed_data, password), &#39;Sensitive data does not match&#39;);
+
+  // Unload session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Authenticate to key2 using the unsealed password.
+  app.SetAuthPassword(unsealed_data);
+
+  // Encrypt and decrypt a message.
+  var message = [0x11, 0x22, 0x33, 0x44, 0x55];
+  var encrypted = app.Encrypt(key2_handle, message);
+  var decrypted = app.Decrypt(key2_handle, encrypted);
+  assert(_.isEqual(message, decrypted) == true, &#39;Message recovered&#39;);
+
+  // Clear session authz.
+  app.SetAuthPassword(&#39;&#39;);
+
+  // Flush persistent keys.
+  assert(app.EvictControl(TPM2_RH_OWNER, key1_handle, key1_handle) == TPM2_RC_SUCCESS, &#39;EvictControl failed&#39;);
+  assert(app.EvictControl(TPM2_RH_OWNER, key2_handle, key2_handle) == TPM2_RC_SUCCESS, &#39;EvictControl failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_authorization" data-value="pg_authorization">Previous</a></li>
+                             <li><a href="#pg_glossary" data-value="pg_glossary">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_glossary
+             class="page"
+              style="display: none;">
+          <h2>Glossary</h2>
+<dl class="dl-horizontal">
+  <dt>AIK</dt>
+  <dd>Attestation Identity Key. Signing key provided and certified by the TPM owner.
+    Used to sign PCR quotes and certify other keys loaded into the TPM.</dd>
+
+  <dt>CRTM</dt>
+  <dd>Core Root of Trust for Measurement. Immutable code that measures the firmware.</dd>
+
+  <dt>DA</dt>
+  <dd>Dictionary Attack. Keys protected with user-authorization value are also protected
+    against a dictionary attack: the TPM enters a lockout mode after 3 failed attempts.</dd>
+
+  <dt>EK</dt>
+  <dd>Endorsement Key. The primary encryption key derived from the endorsement hierarchy's
+    seed. Used to identify the machine since it doesn't change during the lifetime
+    of the device. Provisioned and certified by the TPM manufacturer.</dd>
+
+  <dt>KDF</dt>
+  <dd>Key Derivation Function. Used to derive key material from a fixed seed.</dd>
+
+  <dt>NVDATA</dt>
+  <dd>Non-Volatile Data. Set of data variables that persist between power cycles. NV
+    data saves private and public variables. Private data includes the TPM's system
+    state and secret seeds. Public data includes certificates and evicted key objects.
+    NV data is limited in size (a few KB).
+  </dd>
+
+  <dt>PCR</dt>
+  <dd>Platform Configuration Register. A register inside the TPM used to store system
+    measurements. Folding-hash semantics.</dd>
+
+  <dt>RA</dt>
+  <dd>Remote Attestation. A protocol that lets a remote party read the boot event log
+    and a fresh PCR quote securely. Protocol is used for host integrity verification.</dd>
+
+  <dt>TCG</dt>
+  <dd>Trusted Computing Group. Organization that develops and defines industry specifications
+    and standards, supportive of hardware based root of trust.</dd>
+
+  <dt>TPM</dt>
+  <dd>Trusted Platform Module. A dedicated cryptographic device. Supports secure key
+    generation and remote system attestation.</dd>
+
+  <dt>TSS</dt>
+  <dd>TPM Software Stack. Host software layer that manages TPM resources (objects),
+    serializes commands buffers and unserializes response buffers.</dd>
+</dl>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_sealing" data-value="pg_sealing">Previous</a></li>
+                             <li><a href="#pg_reading" data-value="pg_reading">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_reading
+             class="page"
+              style="display: none;">
+          <h2>Further Reading</h2>
+<p>
+  <ol>
+    <li><a href="https://trustedcomputinggroup.org/resource/tpm-library-specification/">TPM 2.0 library specification (TCG)</a></li>
+    <li><a href="https://www.apress.com/us/book/9781430265832">A practical guide to TPM2.0</a></li>
+    <li><a href="https://github.com/Microsoft/ms-tpm-20-ref">Microsoft TPM 2.0 reference implementation</a></li>
+  </ol>
+</p>          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_glossary" data-value="pg_glossary">Previous</a></li>
+                           </ul>
+          </nav>
+        </div>
+              </div>
+
+      <!-- Simulator window -->
+      <div class="col-md-5">
+        <!-- affix sets position to fixed. width 40% is the column width (5) divided by the
+             total number of row columns (12) -->
+        <div class="simulator_window affix" style="width: 40%">
+          <!-- Menu + Top system status -->
+<div class="row">
+  <!-- Menu -->
+  <div class="col-md-4">
+    <div class="btn-group" role="group" aria-label="...">
+      <!-- System menu -->
+      <div class="btn-group" role="group">
+        <button class="btn btn-default dropdown-toggle" type="button" id="dropdown_system"
+          data-toggle="dropdown" aria-haspopup="true" aria-expanded="true">
+              System
+              <span class="caret"></span>
+            </button>
+        <ul class="dropdown-menu" aria-labelledby="dropdown_system" id="system_actions">
+          <li><a href="#" data-value="restart">Restart</a></li>
+          <li role="separator" class="divider"></li>
+          <li><a href="#" data-value="clear">Clear</a></li>
+          <li role="separator" class="divider"></li>
+          <li><a href="#" data-value="manufacture_reset">Manufacture reset</a></li>
+        </ul>
+      </div>
+
+      <!-- View menu -->
+      <div class="btn-group" role="group">
+        <button class="btn btn-default dropdown-toggle" type="button" id="dropdown_view"
+          data-toggle="dropdown" aria-haspopup="true" aria-expanded="true">
+              View
+              <span class="caret"></span>
+            </button>
+        <ul class="dropdown-menu" aria-labelledby="dropdown_view" id="view_actions">
+                    <li><a href="#" data-value="view_window_pcrs"><input type="checkbox" id="check_window_pcrs" />&nbsp;PCRs window</a></li>
+                    <li><a href="#" data-value="view_window_seeds"><input type="checkbox" id="check_window_seeds" />&nbsp;Seeds window</a></li>
+                    <li><a href="#" data-value="view_window_logs"><input type="checkbox" id="check_window_logs" checked/>&nbsp;Logs window</a></li>
+                    <li role="separator" class="divider"></li>
+          <li><a href="#" data-value="toggle_verbose_logs"><input type="checkbox" id="check_verbose_logs" checked/>&nbsp;Verbose logs</a></li>
+          <li><a href="#" data-value="clear_logs">Clear log</a></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="center-block" role="group">
+      <span class="glyphicon glyphicon-remove-sign" id="icon_powered"></span>&nbsp;Powered
+      <span class="glyphicon glyphicon-remove-sign" id="icon_manufactured"></span>&nbsp;Manufactured
+      <span class="glyphicon glyphicon-remove-sign" id="icon_started"></span>&nbsp;Started
+      (<span id="boot_counter"></span>)
+    </div>
+  </div>
+  <div class="col-md-2">
+    <div id="simulator_version" style="font-style: italic;"></div>
+  </div>
+</div>
+
+<!-- Horizontal divisor -->
+<div class="row form-group">
+</div>
+
+<!-- PCRs -->
+<div class="row" id="window_pcrs" style="display: none">
+  <div class="col-md-12">
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title">Registers</h3>
+      </div>
+      <div class="panel-body">
+        <table class="table table-striped" id="table_pcrs">
+          <thead>
+            <tr>
+              <th data-field="pcr">PCR</th>
+              <th data-field="value" data-formatter="ShortHexFormatter">SHA256</th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Secrets -->
+<div class="row" id="window_seeds" style="display: none">
+  <div class="col-md-12">
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title">Primary Seeds</h3>
+      </div>
+      <div class="panel-body">
+        <table class="table table-striped" id="table_seeds" data-card-view="true">
+          <thead>
+            <tr>
+              <th data-field="hierarchy">Hierarchy</th>
+              <th data-field="value" data-formatter="ShortHexFormatter">Seed</th>
+            </tr>
+          </thead>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Log window -->
+<div class="row" id="window_logs">
+  <div class="col-md-12">
+    <textarea class="form-control" readonly rows="10" id="textarea_logs"></textarea>
+  </div>
+</div>
+
+</div>        </div>
+
+      </div>
+    </div>
+</body>
+
+</html>
