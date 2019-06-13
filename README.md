@@ -39,7 +39,7 @@ Javascript.
 Initialize git submodules:
 
 ```shell
-git submodules update --init
+git submodule update --init
 ```
 
 Activate emsdk:
