@@ -46,11 +46,8 @@ template <typename T> constexpr size_t TPM2BStructSize() {
 template <typename T,
           TSS2_RC (*Marshaler)(T const *, uint8_t *, size_t, size_t *)>
 std::vector<uint8_t> TPM2BMarshal(T const *src) {
-  size_t offset = 0;
-  TSS2_RC rc = Marshaler(src, nullptr, 0, &offset);
-  assert(rc == TPM2_RC_SUCCESS);
-  std::vector<uint8_t> buffer(offset, 0);
-  rc = Marshaler(src, buffer.data(), buffer.size(), nullptr);
+  std::vector<uint8_t> buffer(sizeof(*src), 0);
+  TSS2_RC rc = Marshaler(src, buffer.data(), buffer.size(), nullptr);
   assert(rc == TPM2_RC_SUCCESS);
   return buffer;
 }

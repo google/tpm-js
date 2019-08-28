@@ -39,7 +39,7 @@ Javascript.
 Initialize git submodules:
 
 ```shell
-git submodules update --init
+git submodule update --init
 ```
 
 Activate emsdk:
@@ -57,7 +57,11 @@ emconfigure cmake ..
 make -j4
 ```
 
-Run unit-tests: `shell make check`
+Run unit-tests:
+
+```shell
+make check
+```
 
 ## Serve Files
 

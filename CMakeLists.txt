@@ -27,7 +27,7 @@ if(DEFINED ENV{EMSCRIPTEN})
         "-s ASSERTIONS=2"
         "-s SAFE_HEAP=0"
         "-s STACK_OVERFLOW_CHECK=2"
-        "-s DISABLE_EXCEPTION_CATCHING=0"
+        "-s DISABLE_EXCEPTION_CATCHING=1"
         "-s ALLOW_MEMORY_GROWTH=1"
         "-s WASM=1"
        )
