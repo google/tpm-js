@@ -1,3 +1,8 @@
+// Copyright 2010 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 // The Module object: Our interface to the outside world. We import
 // and export values on it. There are various ways Module can be used:
 // 1. Not defined. We create it here
@@ -30,44 +35,68 @@ for (key in Module) {
   }
 }
 
-Module['arguments'] = [];
-Module['thisProgram'] = './this.program';
-Module['quit'] = function(status, toThrow) {
+var arguments_ = [];
+var thisProgram = './this.program';
+var quit_ = function(status, toThrow) {
   throw toThrow;
 };
-Module['preRun'] = [];
-Module['postRun'] = [];
 
-// The environment setup code below is customized to use Module.
-// *** Environment setup code ***
+// Determine the runtime environment we are in. You can customize this by
+// setting the ENVIRONMENT setting at compile time (see settings.js).
 
 var ENVIRONMENT_IS_WEB = false;
 var ENVIRONMENT_IS_WORKER = false;
 var ENVIRONMENT_IS_NODE = false;
+var ENVIRONMENT_HAS_NODE = false;
 var ENVIRONMENT_IS_SHELL = false;
 ENVIRONMENT_IS_WEB = typeof window === 'object';
 ENVIRONMENT_IS_WORKER = typeof importScripts === 'function';
-ENVIRONMENT_IS_NODE = typeof process === 'object' && typeof require === 'function' && !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_WORKER;
+// A web environment like Electron.js can have Node enabled, so we must
+// distinguish between Node-enabled environments and Node environments per se.
+// This will allow the former to do things like mount NODEFS.
+// Extended check using process.versions fixes issue #8816.
+// (Also makes redundant the original check that 'require' is a function.)
+ENVIRONMENT_HAS_NODE = typeof process === 'object' && typeof process.versions === 'object' && typeof process.versions.node === 'string';
+ENVIRONMENT_IS_NODE = ENVIRONMENT_HAS_NODE && !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_WORKER;
 ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
 
 if (Module['ENVIRONMENT']) {
   throw new Error('Module.ENVIRONMENT has been deprecated. To force the environment, use the ENVIRONMENT compile-time option (for example, -s ENVIRONMENT=web or -s ENVIRONMENT=node)');
 }
 
+
 // Three configurations we can be running in:
 // 1) We could be the application main() thread running in the main JS UI thread. (ENVIRONMENT_IS_WORKER == false and ENVIRONMENT_IS_PTHREAD == false)
 // 2) We could be the application main() thread proxied to worker. (with Emscripten -s PROXY_TO_WORKER=1) (ENVIRONMENT_IS_WORKER == true, ENVIRONMENT_IS_PTHREAD == false)
 // 3) We could be an application pthread running in a worker. (ENVIRONMENT_IS_WORKER == true and ENVIRONMENT_IS_PTHREAD == true)
 
-if (ENVIRONMENT_IS_NODE) {
 
+
+
+// `/` should be present at the end if `scriptDirectory` is not empty
+var scriptDirectory = '';
+function locateFile(path) {
+  if (Module['locateFile']) {
+    return Module['locateFile'](path, scriptDirectory);
+  }
+  return scriptDirectory + path;
+}
+
+// Hooks that are implemented differently in different runtime environments.
+var read_,
+    readAsync,
+    readBinary,
+    setWindowTitle;
+
+if (ENVIRONMENT_IS_NODE) {
+  scriptDirectory = __dirname + '/';
 
   // Expose functionality in the same simple way that the shells work
   // Note that we pollute the global namespace here, otherwise we break in node
   var nodeFS;
   var nodePath;
 
-  Module['read'] = function shell_read(filename, binary) {
+  read_ = function shell_read(filename, binary) {
     var ret;
       if (!nodeFS) nodeFS = require('fs');
       if (!nodePath) nodePath = require('path');
@@ -76,8 +105,8 @@ if (ENVIRONMENT_IS_NODE) {
     return binary ? ret : ret.toString();
   };
 
-  Module['readBinary'] = function readBinary(filename) {
-    var ret = Module['read'](filename, true);
+  readBinary = function readBinary(filename) {
+    var ret = read_(filename, true);
     if (!ret.buffer) {
       ret = new Uint8Array(ret);
     }
@@ -86,10 +115,10 @@ if (ENVIRONMENT_IS_NODE) {
   };
 
   if (process['argv'].length > 1) {
-    Module['thisProgram'] = process['argv'][1].replace(/\\/g, '/');
+    thisProgram = process['argv'][1].replace(/\\/g, '/');
   }
 
-  Module['arguments'] = process['argv'].slice(2);
+  arguments_ = process['argv'].slice(2);
 
   if (typeof module !== 'undefined') {
     module['exports'] = Module;
@@ -101,14 +130,10 @@ if (ENVIRONMENT_IS_NODE) {
       throw ex;
     }
   });
-  // Currently node will swallow unhandled rejections, but this behavior is
-  // deprecated, and in the future it will exit with error status.
-  process['on']('unhandledRejection', function(reason, p) {
-    err('node.js exiting due to unhandled promise rejection');
-    process['exit'](1);
-  });
 
-  Module['quit'] = function(status) {
+  process['on']('unhandledRejection', abort);
+
+  quit_ = function(status) {
     process['exit'](status);
   };
 
@@ -118,12 +143,12 @@ if (ENVIRONMENT_IS_SHELL) {
 
 
   if (typeof read != 'undefined') {
-    Module['read'] = function shell_read(f) {
+    read_ = function shell_read(f) {
       return read(f);
     };
   }
 
-  Module['readBinary'] = function readBinary(f) {
+  readBinary = function readBinary(f) {
     var data;
     if (typeof readbuffer === 'function') {
       return new Uint8Array(readbuffer(f));
@@ -134,21 +159,42 @@ if (ENVIRONMENT_IS_SHELL) {
   };
 
   if (typeof scriptArgs != 'undefined') {
-    Module['arguments'] = scriptArgs;
+    arguments_ = scriptArgs;
   } else if (typeof arguments != 'undefined') {
-    Module['arguments'] = arguments;
+    arguments_ = arguments;
   }
 
   if (typeof quit === 'function') {
-    Module['quit'] = function(status) {
+    quit_ = function(status) {
       quit(status);
-    }
+    };
+  }
+
+  if (typeof print !== 'undefined') {
+    // Prefer to use print/printErr where they exist, as they usually work better.
+    if (typeof console === 'undefined') console = {};
+    console.log = print;
+    console.warn = console.error = typeof printErr !== 'undefined' ? printErr : print;
   }
 } else
 if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
+  if (ENVIRONMENT_IS_WORKER) { // Check worker, not web, since window could be polyfilled
+    scriptDirectory = self.location.href;
+  } else if (document.currentScript) { // web
+    scriptDirectory = document.currentScript.src;
+  }
+  // blob urls look like blob:http://site.com/etc/etc and we cannot infer anything from them.
+  // otherwise, slice off the final part of the url to find the script directory.
+  // if scriptDirectory does not contain a slash, lastIndexOf will return -1,
+  // and scriptDirectory will correctly be replaced with an empty string.
+  if (scriptDirectory.indexOf('blob:') !== 0) {
+    scriptDirectory = scriptDirectory.substr(0, scriptDirectory.lastIndexOf('/')+1);
+  } else {
+    scriptDirectory = '';
+  }
 
 
-  Module['read'] = function shell_read(url) {
+  read_ = function shell_read(url) {
       var xhr = new XMLHttpRequest();
       xhr.open('GET', url, false);
       xhr.send(null);
@@ -156,7 +202,7 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
   };
 
   if (ENVIRONMENT_IS_WORKER) {
-    Module['readBinary'] = function readBinary(url) {
+    readBinary = function readBinary(url) {
         var xhr = new XMLHttpRequest();
         xhr.open('GET', url, false);
         xhr.responseType = 'arraybuffer';
@@ -165,7 +211,7 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
     };
   }
 
-  Module['readAsync'] = function readAsync(url, onload, onerror) {
+  readAsync = function readAsync(url, onload, onerror) {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', url, true);
     xhr.responseType = 'arraybuffer';
@@ -180,7 +226,7 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
     xhr.send(null);
   };
 
-  Module['setWindowTitle'] = function(title) { document.title = title };
+  setWindowTitle = function(title) { document.title = title };
 } else
 {
   throw new Error('environment detection error');
@@ -188,14 +234,8 @@ if (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) {
 
 // Set up the out() and err() hooks, which are how we can print to stdout or
 // stderr, respectively.
-// If the user provided Module.print or printErr, use that. Otherwise,
-// console.log is checked first, as 'print' on the web will open a print dialogue
-// printErr is preferable to console.warn (works better in shells)
-// bind(console) is necessary to fix IE/Edge closed dev tools panel behavior.
-var out = Module['print'] || (typeof console !== 'undefined' ? console.log.bind(console) : (typeof print !== 'undefined' ? print : null));
-var err = Module['printErr'] || (typeof printErr !== 'undefined' ? printErr : ((typeof console !== 'undefined' && console.warn.bind(console)) || out));
-
-// *** Environment setup code ***
+var out = Module['print'] || console.log.bind(console);
+var err = Module['printErr'] || console.warn.bind(console);
 
 // Merge back in the overrides
 for (key in moduleOverrides) {
@@ -205,9 +245,40 @@ for (key in moduleOverrides) {
 }
 // Free the object hierarchy contained in the overrides, this lets the GC
 // reclaim data used e.g. in memoryInitializerRequest, which is a large typed array.
-moduleOverrides = undefined;
+moduleOverrides = null;
+
+// Emit code to handle expected values on the Module object. This applies Module.x
+// to the proper local x. This has two benefits: first, we only emit it if it is
+// expected to arrive, and second, by using a local everywhere else that can be
+// minified.
+if (Module['arguments']) arguments_ = Module['arguments'];if (!Object.getOwnPropertyDescriptor(Module, 'arguments')) Object.defineProperty(Module, 'arguments', { get: function() { abort('Module.arguments has been replaced with plain arguments_') } });
+if (Module['thisProgram']) thisProgram = Module['thisProgram'];if (!Object.getOwnPropertyDescriptor(Module, 'thisProgram')) Object.defineProperty(Module, 'thisProgram', { get: function() { abort('Module.thisProgram has been replaced with plain thisProgram') } });
+if (Module['quit']) quit_ = Module['quit'];if (!Object.getOwnPropertyDescriptor(Module, 'quit')) Object.defineProperty(Module, 'quit', { get: function() { abort('Module.quit has been replaced with plain quit_') } });
+
+// perform assertions in shell.js after we set up out() and err(), as otherwise if an assertion fails it cannot print the message
+// Assertions on removed incoming Module JS APIs.
+assert(typeof Module['memoryInitializerPrefixURL'] === 'undefined', 'Module.memoryInitializerPrefixURL option was removed, use Module.locateFile instead');
+assert(typeof Module['pthreadMainPrefixURL'] === 'undefined', 'Module.pthreadMainPrefixURL option was removed, use Module.locateFile instead');
+assert(typeof Module['cdInitializerPrefixURL'] === 'undefined', 'Module.cdInitializerPrefixURL option was removed, use Module.locateFile instead');
+assert(typeof Module['filePackagePrefixURL'] === 'undefined', 'Module.filePackagePrefixURL option was removed, use Module.locateFile instead');
+assert(typeof Module['read'] === 'undefined', 'Module.read option was removed (modify read_ in JS)');
+assert(typeof Module['readAsync'] === 'undefined', 'Module.readAsync option was removed (modify readAsync in JS)');
+assert(typeof Module['readBinary'] === 'undefined', 'Module.readBinary option was removed (modify readBinary in JS)');
+assert(typeof Module['setWindowTitle'] === 'undefined', 'Module.setWindowTitle option was removed (modify setWindowTitle in JS)');
+if (!Object.getOwnPropertyDescriptor(Module, 'read')) Object.defineProperty(Module, 'read', { get: function() { abort('Module.read has been replaced with plain read_') } });
+if (!Object.getOwnPropertyDescriptor(Module, 'readAsync')) Object.defineProperty(Module, 'readAsync', { get: function() { abort('Module.readAsync has been replaced with plain readAsync') } });
+if (!Object.getOwnPropertyDescriptor(Module, 'readBinary')) Object.defineProperty(Module, 'readBinary', { get: function() { abort('Module.readBinary has been replaced with plain readBinary') } });
+// TODO: add when SDL2 is fixed if (!Object.getOwnPropertyDescriptor(Module, 'setWindowTitle')) Object.defineProperty(Module, 'setWindowTitle', { get: function() { abort('Module.setWindowTitle has been replaced with plain setWindowTitle') } });
 
 
+// TODO remove when SDL2 is fixed (also see above)
+
+
+
+// Copyright 2017 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
 
 // {{PREAMBLE_ADDITIONS}}
 
@@ -215,37 +286,28 @@ var STACK_ALIGN = 16;
 
 // stack management, and other functionality that is provided by the compiled code,
 // should not be used before it is ready
-stackSave = stackRestore = stackAlloc = setTempRet0 = getTempRet0 = function() {
+stackSave = stackRestore = stackAlloc = function() {
   abort('cannot use the stack before compiled code is ready to run, and has provided stack access');
 };
 
 function staticAlloc(size) {
-  assert(!staticSealed);
-  var ret = STATICTOP;
-  STATICTOP = (STATICTOP + size + 15) & -16;
-  assert(STATICTOP < TOTAL_MEMORY, 'not enough memory for static allocation - increase TOTAL_MEMORY');
-  return ret;
+  abort('staticAlloc is no longer available at runtime; instead, perform static allocations at compile time (using makeStaticAlloc)');
 }
 
 function dynamicAlloc(size) {
   assert(DYNAMICTOP_PTR);
   var ret = HEAP32[DYNAMICTOP_PTR>>2];
   var end = (ret + size + 15) & -16;
-  HEAP32[DYNAMICTOP_PTR>>2] = end;
-  if (end >= TOTAL_MEMORY) {
-    var success = enlargeMemory();
-    if (!success) {
-      HEAP32[DYNAMICTOP_PTR>>2] = ret;
-      return 0;
-    }
+  if (end > _emscripten_get_heap_size()) {
+    abort('failure to dynamicAlloc - memory growth etc. is not supported there, call malloc/sbrk directly');
   }
+  HEAP32[DYNAMICTOP_PTR>>2] = end;
   return ret;
 }
 
 function alignMemory(size, factor) {
   if (!factor) factor = STACK_ALIGN; // stack alignment (16-byte) by default
-  var ret = size = Math.ceil(size / factor) * factor;
-  return ret;
+  return Math.ceil(size / factor) * factor;
 }
 
 function getNativeTypeSize(type) {
@@ -261,7 +323,7 @@ function getNativeTypeSize(type) {
         return 4; // A pointer
       } else if (type[0] === 'i') {
         var bits = parseInt(type.substr(1));
-        assert(bits % 8 === 0);
+        assert(bits % 8 === 0, 'getNativeTypeSize invalid bits ' + bits + ', type ' + type);
         return bits / 8;
       } else {
         return 0;
@@ -292,11 +354,115 @@ var asm2wasmImports = { // special asm2wasm imports
 var jsCallStartIndex = 1;
 var functionPointers = new Array(0);
 
-// 'sig' parameter is only used on LLVM wasm backend
+// Wraps a JS function as a wasm function with a given signature.
+// In the future, we may get a WebAssembly.Function constructor. Until then,
+// we create a wasm module that takes the JS function as an import with a given
+// signature, and re-exports that as a wasm function.
+function convertJsFunctionToWasm(func, sig) {
+
+  // The module is static, with the exception of the type section, which is
+  // generated based on the signature passed in.
+  var typeSection = [
+    0x01, // id: section,
+    0x00, // length: 0 (placeholder)
+    0x01, // count: 1
+    0x60, // form: func
+  ];
+  var sigRet = sig.slice(0, 1);
+  var sigParam = sig.slice(1);
+  var typeCodes = {
+    'i': 0x7f, // i32
+    'j': 0x7e, // i64
+    'f': 0x7d, // f32
+    'd': 0x7c, // f64
+  };
+
+  // Parameters, length + signatures
+  typeSection.push(sigParam.length);
+  for (var i = 0; i < sigParam.length; ++i) {
+    typeSection.push(typeCodes[sigParam[i]]);
+  }
+
+  // Return values, length + signatures
+  // With no multi-return in MVP, either 0 (void) or 1 (anything else)
+  if (sigRet == 'v') {
+    typeSection.push(0x00);
+  } else {
+    typeSection = typeSection.concat([0x01, typeCodes[sigRet]]);
+  }
+
+  // Write the overall length of the type section back into the section header
+  // (excepting the 2 bytes for the section id and length)
+  typeSection[1] = typeSection.length - 2;
+
+  // Rest of the module is static
+  var bytes = new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, // magic ("\0asm")
+    0x01, 0x00, 0x00, 0x00, // version: 1
+  ].concat(typeSection, [
+    0x02, 0x07, // import section
+      // (import "e" "f" (func 0 (type 0)))
+      0x01, 0x01, 0x65, 0x01, 0x66, 0x00, 0x00,
+    0x07, 0x05, // export section
+      // (export "f" (func 0 (type 0)))
+      0x01, 0x01, 0x66, 0x00, 0x00,
+  ]));
+
+   // We can compile this wasm module synchronously because it is very small.
+  // This accepts an import (at "e.f"), that it reroutes to an export (at "f")
+  var module = new WebAssembly.Module(bytes);
+  var instance = new WebAssembly.Instance(module, {
+    e: {
+      f: func
+    }
+  });
+  var wrappedFunc = instance.exports.f;
+  return wrappedFunc;
+}
+
+// Add a wasm function to the table.
+function addFunctionWasm(func, sig) {
+  var table = wasmTable;
+  var ret = table.length;
+
+  // Grow the table
+  try {
+    table.grow(1);
+  } catch (err) {
+    if (!err instanceof RangeError) {
+      throw err;
+    }
+    throw 'Unable to grow wasm table. Use a higher value for RESERVED_FUNCTION_POINTERS or set ALLOW_TABLE_GROWTH.';
+  }
+
+  // Insert new element
+  try {
+    // Attempting to call this with JS function will cause of table.set() to fail
+    table.set(ret, func);
+  } catch (err) {
+    if (!err instanceof TypeError) {
+      throw err;
+    }
+    assert(typeof sig !== 'undefined', 'Missing signature argument to addFunction');
+    var wrapped = convertJsFunctionToWasm(func, sig);
+    table.set(ret, wrapped);
+  }
+
+  return ret;
+}
+
+function removeFunctionWasm(index) {
+  // TODO(sbc): Look into implementing this to allow re-using of table slots
+}
+
+// 'sig' parameter is required for the llvm backend but only when func is not
+// already a WebAssembly function.
 function addFunction(func, sig) {
   if (typeof sig === 'undefined') {
-    err('warning: addFunction(): You should provide a wasm function signature string as a second argument. This is not necessary for asm.js and asm2wasm, but is required for the LLVM wasm backend, so it is recommended for full portability.');
+    err('warning: addFunction(): You should provide a wasm function signature string as a second argument. This is not necessary for asm.js and asm2wasm, but can be required for the LLVM wasm backend, so it is recommended for full portability.');
   }
+
+
   var base = 0;
   for (var i = base; i < base + 0; i++) {
     if (!functionPointers[i]) {
@@ -305,9 +471,11 @@ function addFunction(func, sig) {
     }
   }
   throw 'Finished up all reserved function pointers. Use a higher value for RESERVED_FUNCTION_POINTERS.';
+
 }
 
 function removeFunction(index) {
+
   functionPointers[index-jsCallStartIndex] = null;
 }
 
@@ -357,16 +525,21 @@ function dynCall(sig, ptr, args) {
   }
 }
 
+var tempRet0 = 0;
+
+var setTempRet0 = function(value) {
+  tempRet0 = value;
+};
+
+var getTempRet0 = function() {
+  return tempRet0;
+};
 
 function getCompilerSetting(name) {
   throw 'You must build with -s RETAIN_COMPILER_SETTINGS=1 for getCompilerSetting or emscripten_get_compiler_setting to work';
 }
 
 var Runtime = {
-  // FIXME backwards compatibility layer for ports. Support some Runtime.*
-  //       for now, fix it there, then remove it from here. That way we
-  //       can minimize any period of breakage.
-  dynCall: dynCall, // for SDL2 port
   // helpful errors
   getTempRet0: function() { abort('getTempRet0() is now a top-level function, after removing the Runtime object. Remove "Runtime."') },
   staticAlloc: function() { abort('staticAlloc() is now a top-level function, after removing the Runtime object. Remove "Runtime."') },
@@ -380,6 +553,8 @@ var Runtime = {
 var GLOBAL_BASE = 1024;
 
 
+
+
 // === Preamble library stuff ===
 
 // Documentation for the public APIs defined in this file must be updated in:
@@ -391,98 +566,16 @@ var GLOBAL_BASE = 1024;
 //    is up at http://kripken.github.io/emscripten-site/docs/api_reference/preamble.js.html
 
 
+var wasmBinary;if (Module['wasmBinary']) wasmBinary = Module['wasmBinary'];if (!Object.getOwnPropertyDescriptor(Module, 'wasmBinary')) Object.defineProperty(Module, 'wasmBinary', { get: function() { abort('Module.wasmBinary has been replaced with plain wasmBinary') } });
 
-//========================================
-// Runtime essentials
-//========================================
 
-var ABORT = 0; // whether we are quitting the application. no code should run after this. set in exit() and abort()
-var EXITSTATUS = 0;
-
-/** @type {function(*, string=)} */
-function assert(condition, text) {
-  if (!condition) {
-    abort('Assertion failed: ' + text);
-  }
+if (typeof WebAssembly !== 'object') {
+  abort('No WebAssembly support found. Build with -s WASM=0 to target JavaScript instead.');
 }
 
-var globalScope = this;
 
-// Returns the C function with a specified identifier (for C++, you need to do manual name mangling)
-function getCFunc(ident) {
-  var func = Module['_' + ident]; // closure exported function
-  assert(func, 'Cannot call unknown function ' + ident + ', make sure it is exported');
-  return func;
-}
-
-var JSfuncs = {
-  // Helpers for cwrap -- it can't refer to Runtime directly because it might
-  // be renamed by closure, instead it calls JSfuncs['stackSave'].body to find
-  // out what the minified function name is.
-  'stackSave': function() {
-    stackSave()
-  },
-  'stackRestore': function() {
-    stackRestore()
-  },
-  // type conversion from js to c
-  'arrayToC' : function(arr) {
-    var ret = stackAlloc(arr.length);
-    writeArrayToMemory(arr, ret);
-    return ret;
-  },
-  'stringToC' : function(str) {
-    var ret = 0;
-    if (str !== null && str !== undefined && str !== 0) { // null string
-      // at most 4 bytes per UTF-8 code point, +1 for the trailing '\0'
-      var len = (str.length << 2) + 1;
-      ret = stackAlloc(len);
-      stringToUTF8(str, ret, len);
-    }
-    return ret;
-  }
-};
-
-// For fast lookup of conversion functions
-var toC = {
-  'string': JSfuncs['stringToC'], 'array': JSfuncs['arrayToC']
-};
-
-
-// C calling interface.
-function ccall(ident, returnType, argTypes, args, opts) {
-  function convertReturnValue(ret) {
-    if (returnType === 'string') return Pointer_stringify(ret);
-    if (returnType === 'boolean') return Boolean(ret);
-    return ret;
-  }
-
-  var func = getCFunc(ident);
-  var cArgs = [];
-  var stack = 0;
-  assert(returnType !== 'array', 'Return type should not be "array".');
-  if (args) {
-    for (var i = 0; i < args.length; i++) {
-      var converter = toC[argTypes[i]];
-      if (converter) {
-        if (stack === 0) stack = stackSave();
-        cArgs[i] = converter(args[i]);
-      } else {
-        cArgs[i] = args[i];
-      }
-    }
-  }
-  var ret = func.apply(null, cArgs);
-  ret = convertReturnValue(ret);
-  if (stack !== 0) stackRestore(stack);
-  return ret;
-}
-
-function cwrap(ident, returnType, argTypes, opts) {
-  return function() {
-    return ccall(ident, returnType, argTypes, arguments, opts);
-  }
-}
+// In MINIMAL_RUNTIME, setValue() and getValue() are only available when building with safe heap enabled, for heap safety checking.
+// In traditional runtime, setValue() and getValue() are always available (although their use is highly discouraged due to perf penalties)
 
 /** @type {function(number, number, string, boolean=)} */
 function setValue(ptr, value, type, noSafe) {
@@ -517,11 +610,105 @@ function getValue(ptr, type, noSafe) {
   return null;
 }
 
+
+
+
+
+// Wasm globals
+
+var wasmMemory;
+
+// Potentially used for direct table calls.
+var wasmTable;
+
+
+//========================================
+// Runtime essentials
+//========================================
+
+// whether we are quitting the application. no code should run after this.
+// set in exit() and abort()
+var ABORT = false;
+
+// set by exit() and abort().  Passed to 'onExit' handler.
+// NOTE: This is also used as the process return code code in shell environments
+// but only when noExitRuntime is false.
+var EXITSTATUS = 0;
+
+/** @type {function(*, string=)} */
+function assert(condition, text) {
+  if (!condition) {
+    abort('Assertion failed: ' + text);
+  }
+}
+
+// Returns the C function with a specified identifier (for C++, you need to do manual name mangling)
+function getCFunc(ident) {
+  var func = Module['_' + ident]; // closure exported function
+  assert(func, 'Cannot call unknown function ' + ident + ', make sure it is exported');
+  return func;
+}
+
+// C calling interface.
+function ccall(ident, returnType, argTypes, args, opts) {
+  // For fast lookup of conversion functions
+  var toC = {
+    'string': function(str) {
+      var ret = 0;
+      if (str !== null && str !== undefined && str !== 0) { // null string
+        // at most 4 bytes per UTF-8 code point, +1 for the trailing '\0'
+        var len = (str.length << 2) + 1;
+        ret = stackAlloc(len);
+        stringToUTF8(str, ret, len);
+      }
+      return ret;
+    },
+    'array': function(arr) {
+      var ret = stackAlloc(arr.length);
+      writeArrayToMemory(arr, ret);
+      return ret;
+    }
+  };
+
+  function convertReturnValue(ret) {
+    if (returnType === 'string') return UTF8ToString(ret);
+    if (returnType === 'boolean') return Boolean(ret);
+    return ret;
+  }
+
+  var func = getCFunc(ident);
+  var cArgs = [];
+  var stack = 0;
+  assert(returnType !== 'array', 'Return type should not be "array".');
+  if (args) {
+    for (var i = 0; i < args.length; i++) {
+      var converter = toC[argTypes[i]];
+      if (converter) {
+        if (stack === 0) stack = stackSave();
+        cArgs[i] = converter(args[i]);
+      } else {
+        cArgs[i] = args[i];
+      }
+    }
+  }
+  var ret = func.apply(null, cArgs);
+  assert(!(opts && opts.async), 'async call is only supported with Emterpretify for now, see #9029');
+
+  ret = convertReturnValue(ret);
+  if (stack !== 0) stackRestore(stack);
+  return ret;
+}
+
+function cwrap(ident, returnType, argTypes, opts) {
+  return function() {
+    return ccall(ident, returnType, argTypes, arguments, opts);
+  }
+}
+
 var ALLOC_NORMAL = 0; // Tries to use _malloc()
 var ALLOC_STACK = 1; // Lives for the duration of the current function call
-var ALLOC_STATIC = 2; // Cannot be freed
-var ALLOC_DYNAMIC = 3; // Cannot be freed except through sbrk
-var ALLOC_NONE = 4; // Do not allocate
+var ALLOC_DYNAMIC = 2; // Cannot be freed except through sbrk
+var ALLOC_NONE = 3; // Do not allocate
 
 // allocate(): This is for internal use. You can use it yourself as well, but the interface
 //             is a little tricky (see docs right below). The reason is that it is optimized
@@ -553,7 +740,9 @@ function allocate(slab, types, allocator, ptr) {
   if (allocator == ALLOC_NONE) {
     ret = ptr;
   } else {
-    ret = [typeof _malloc === 'function' ? _malloc : staticAlloc, stackAlloc, staticAlloc, dynamicAlloc][allocator === undefined ? ALLOC_STATIC : allocator](Math.max(size, singleType ? 1 : types.length));
+    ret = [_malloc,
+    stackAlloc,
+    dynamicAlloc][allocator](Math.max(size, singleType ? 1 : types.length));
   }
 
   if (zeroinit) {
@@ -608,42 +797,16 @@ function allocate(slab, types, allocator, ptr) {
 
 // Allocate memory during any stage of startup - static memory early on, dynamic memory later, malloc when ready
 function getMemory(size) {
-  if (!staticSealed) return staticAlloc(size);
   if (!runtimeInitialized) return dynamicAlloc(size);
   return _malloc(size);
 }
 
+
+
+
 /** @type {function(number, number=)} */
 function Pointer_stringify(ptr, length) {
-  if (length === 0 || !ptr) return '';
-  // Find the length, and check for UTF while doing so
-  var hasUtf = 0;
-  var t;
-  var i = 0;
-  while (1) {
-    assert(ptr + i < TOTAL_MEMORY);
-    t = HEAPU8[(((ptr)+(i))>>0)];
-    hasUtf |= t;
-    if (t == 0 && !length) break;
-    i++;
-    if (length && i == length) break;
-  }
-  if (!length) length = i;
-
-  var ret = '';
-
-  if (hasUtf < 128) {
-    var MAX_CHUNK = 1024; // split up into chunks, because .apply on a huge string can overflow the stack
-    var curr;
-    while (length > 0) {
-      curr = String.fromCharCode.apply(String, HEAPU8.subarray(ptr, ptr + Math.min(length, MAX_CHUNK)));
-      ret = ret ? ret + curr : curr;
-      ptr += MAX_CHUNK;
-      length -= MAX_CHUNK;
-    }
-    return ret;
-  }
-  return UTF8ToString(ptr);
+  abort("this function has been removed - you should use UTF8ToString(ptr, maxBytesToRead) instead!");
 }
 
 // Given a pointer 'ptr' to a null-terminated ASCII-encoded string in the emscripten HEAP, returns
@@ -652,7 +815,7 @@ function Pointer_stringify(ptr, length) {
 function AsciiToString(ptr) {
   var str = '';
   while (1) {
-    var ch = HEAP8[((ptr++)>>0)];
+    var ch = HEAPU8[((ptr++)>>0)];
     if (!ch) return str;
     str += String.fromCharCode(ch);
   }
@@ -665,46 +828,47 @@ function stringToAscii(str, outPtr) {
   return writeAsciiToMemory(str, outPtr, false);
 }
 
+
 // Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the given array that contains uint8 values, returns
 // a copy of that string as a Javascript String object.
 
 var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
-function UTF8ArrayToString(u8Array, idx) {
+
+/**
+ * @param {number} idx
+ * @param {number=} maxBytesToRead
+ * @return {string}
+ */
+function UTF8ArrayToString(u8Array, idx, maxBytesToRead) {
+  var endIdx = idx + maxBytesToRead;
   var endPtr = idx;
   // TextDecoder needs to know the byte length in advance, it doesn't stop on null terminator by itself.
   // Also, use the length info to avoid running tiny strings through TextDecoder, since .subarray() allocates garbage.
-  while (u8Array[endPtr]) ++endPtr;
+  // (As a tiny code save trick, compare endPtr against endIdx using a negation, so that undefined means Infinity)
+  while (u8Array[endPtr] && !(endPtr >= endIdx)) ++endPtr;
 
   if (endPtr - idx > 16 && u8Array.subarray && UTF8Decoder) {
     return UTF8Decoder.decode(u8Array.subarray(idx, endPtr));
   } else {
-    var u0, u1, u2, u3, u4, u5;
-
     var str = '';
-    while (1) {
-      // For UTF8 byte structure, see http://en.wikipedia.org/wiki/UTF-8#Description and https://www.ietf.org/rfc/rfc2279.txt and https://tools.ietf.org/html/rfc3629
-      u0 = u8Array[idx++];
-      if (!u0) return str;
+    // If building with TextDecoder, we have already computed the string length above, so test loop end condition against that
+    while (idx < endPtr) {
+      // For UTF8 byte structure, see:
+      // http://en.wikipedia.org/wiki/UTF-8#Description
+      // https://www.ietf.org/rfc/rfc2279.txt
+      // https://tools.ietf.org/html/rfc3629
+      var u0 = u8Array[idx++];
       if (!(u0 & 0x80)) { str += String.fromCharCode(u0); continue; }
-      u1 = u8Array[idx++] & 63;
+      var u1 = u8Array[idx++] & 63;
       if ((u0 & 0xE0) == 0xC0) { str += String.fromCharCode(((u0 & 31) << 6) | u1); continue; }
-      u2 = u8Array[idx++] & 63;
+      var u2 = u8Array[idx++] & 63;
       if ((u0 & 0xF0) == 0xE0) {
         u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
       } else {
-        u3 = u8Array[idx++] & 63;
-        if ((u0 & 0xF8) == 0xF0) {
-          u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | u3;
-        } else {
-          u4 = u8Array[idx++] & 63;
-          if ((u0 & 0xFC) == 0xF8) {
-            u0 = ((u0 & 3) << 24) | (u1 << 18) | (u2 << 12) | (u3 << 6) | u4;
-          } else {
-            u5 = u8Array[idx++] & 63;
-            u0 = ((u0 & 1) << 30) | (u1 << 24) | (u2 << 18) | (u3 << 12) | (u4 << 6) | u5;
-          }
-        }
+        if ((u0 & 0xF8) != 0xF0) warnOnce('Invalid UTF-8 leading byte 0x' + u0.toString(16) + ' encountered when deserializing a UTF-8 string on the asm.js/wasm heap to a JS string!');
+        u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (u8Array[idx++] & 63);
       }
+
       if (u0 < 0x10000) {
         str += String.fromCharCode(u0);
       } else {
@@ -713,13 +877,26 @@ function UTF8ArrayToString(u8Array, idx) {
       }
     }
   }
+  return str;
 }
 
-// Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the emscripten HEAP, returns
-// a copy of that string as a Javascript String object.
-
-function UTF8ToString(ptr) {
-  return UTF8ArrayToString(HEAPU8,ptr);
+// Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the emscripten HEAP, returns a
+// copy of that string as a Javascript String object.
+// maxBytesToRead: an optional length that specifies the maximum number of bytes to read. You can omit
+//                 this parameter to scan the string until the first \0 byte. If maxBytesToRead is
+//                 passed, and the string at [ptr, ptr+maxBytesToReadr[ contains a null byte in the
+//                 middle, then the string will cut short at that byte index (i.e. maxBytesToRead will
+//                 not produce a string of exact length [ptr, ptr+maxBytesToRead[)
+//                 N.B. mixing frequent uses of UTF8ToString() with and without maxBytesToRead may
+//                 throw JS JIT optimizations off, so it is worth to consider consistently using one
+//                 style or the other.
+/**
+ * @param {number} ptr
+ * @param {number=} maxBytesToRead
+ * @return {string}
+ */
+function UTF8ToString(ptr, maxBytesToRead) {
+  return ptr ? UTF8ArrayToString(HEAPU8, ptr, maxBytesToRead) : '';
 }
 
 // Copies the given Javascript String object 'str' to the given byte array at address 'outIdx',
@@ -729,8 +906,9 @@ function UTF8ToString(ptr) {
 //   str: the Javascript string to copy.
 //   outU8Array: the array to copy to. Each index in this array is assumed to be one 8-byte element.
 //   outIdx: The starting offset in the array to begin the copying.
-//   maxBytesToWrite: The maximum number of bytes this function can write to the array. This count should include the null
-//                    terminator, i.e. if maxBytesToWrite=1, only the null terminator will be written and nothing else.
+//   maxBytesToWrite: The maximum number of bytes this function can write to the array.
+//                    This count should include the null terminator,
+//                    i.e. if maxBytesToWrite=1, only the null terminator will be written and nothing else.
 //                    maxBytesToWrite=0 does not write any bytes to the output, not even the null terminator.
 // Returns the number of bytes written, EXCLUDING the null terminator.
 
@@ -745,7 +923,10 @@ function stringToUTF8Array(str, outU8Array, outIdx, maxBytesToWrite) {
     // See http://unicode.org/faq/utf_bom.html#utf16-3
     // For UTF8 byte structure, see http://en.wikipedia.org/wiki/UTF-8#Description and https://www.ietf.org/rfc/rfc2279.txt and https://tools.ietf.org/html/rfc3629
     var u = str.charCodeAt(i); // possibly a lead surrogate
-    if (u >= 0xD800 && u <= 0xDFFF) u = 0x10000 + ((u & 0x3FF) << 10) | (str.charCodeAt(++i) & 0x3FF);
+    if (u >= 0xD800 && u <= 0xDFFF) {
+      var u1 = str.charCodeAt(++i);
+      u = 0x10000 + ((u & 0x3FF) << 10) | (u1 & 0x3FF);
+    }
     if (u <= 0x7F) {
       if (outIdx >= endIdx) break;
       outU8Array[outIdx++] = u;
@@ -758,24 +939,10 @@ function stringToUTF8Array(str, outU8Array, outIdx, maxBytesToWrite) {
       outU8Array[outIdx++] = 0xE0 | (u >> 12);
       outU8Array[outIdx++] = 0x80 | ((u >> 6) & 63);
       outU8Array[outIdx++] = 0x80 | (u & 63);
-    } else if (u <= 0x1FFFFF) {
-      if (outIdx + 3 >= endIdx) break;
-      outU8Array[outIdx++] = 0xF0 | (u >> 18);
-      outU8Array[outIdx++] = 0x80 | ((u >> 12) & 63);
-      outU8Array[outIdx++] = 0x80 | ((u >> 6) & 63);
-      outU8Array[outIdx++] = 0x80 | (u & 63);
-    } else if (u <= 0x3FFFFFF) {
-      if (outIdx + 4 >= endIdx) break;
-      outU8Array[outIdx++] = 0xF8 | (u >> 24);
-      outU8Array[outIdx++] = 0x80 | ((u >> 18) & 63);
-      outU8Array[outIdx++] = 0x80 | ((u >> 12) & 63);
-      outU8Array[outIdx++] = 0x80 | ((u >> 6) & 63);
-      outU8Array[outIdx++] = 0x80 | (u & 63);
     } else {
-      if (outIdx + 5 >= endIdx) break;
-      outU8Array[outIdx++] = 0xFC | (u >> 30);
-      outU8Array[outIdx++] = 0x80 | ((u >> 24) & 63);
-      outU8Array[outIdx++] = 0x80 | ((u >> 18) & 63);
+      if (outIdx + 3 >= endIdx) break;
+      if (u >= 0x200000) warnOnce('Invalid Unicode code point 0x' + u.toString(16) + ' encountered when serializing a JS string to an UTF-8 string on the asm.js/wasm heap! (Valid unicode code points should be in range 0-0x1FFFFF).');
+      outU8Array[outIdx++] = 0xF0 | (u >> 18);
       outU8Array[outIdx++] = 0x80 | ((u >> 12) & 63);
       outU8Array[outIdx++] = 0x80 | ((u >> 6) & 63);
       outU8Array[outIdx++] = 0x80 | (u & 63);
@@ -797,7 +964,6 @@ function stringToUTF8(str, outPtr, maxBytesToWrite) {
 }
 
 // Returns the number of bytes the given Javascript string takes if encoded as a UTF8 byte array, EXCLUDING the null terminator byte.
-
 function lengthBytesUTF8(str) {
   var len = 0;
   for (var i = 0; i < str.length; ++i) {
@@ -805,22 +971,14 @@ function lengthBytesUTF8(str) {
     // See http://unicode.org/faq/utf_bom.html#utf16-3
     var u = str.charCodeAt(i); // possibly a lead surrogate
     if (u >= 0xD800 && u <= 0xDFFF) u = 0x10000 + ((u & 0x3FF) << 10) | (str.charCodeAt(++i) & 0x3FF);
-    if (u <= 0x7F) {
-      ++len;
-    } else if (u <= 0x7FF) {
-      len += 2;
-    } else if (u <= 0xFFFF) {
-      len += 3;
-    } else if (u <= 0x1FFFFF) {
-      len += 4;
-    } else if (u <= 0x3FFFFFF) {
-      len += 5;
-    } else {
-      len += 6;
-    }
+    if (u <= 0x7F) ++len;
+    else if (u <= 0x7FF) len += 2;
+    else if (u <= 0xFFFF) len += 3;
+    else len += 4;
   }
   return len;
 }
+
 
 // Given a pointer 'ptr' to a null-terminated UTF16LE-encoded string in the emscripten HEAP, returns
 // a copy of that string as a Javascript String object.
@@ -981,358 +1139,6 @@ function allocateUTF8OnStack(str) {
   return ret;
 }
 
-function demangle(func) {
-  var __cxa_demangle_func = Module['___cxa_demangle'] || Module['__cxa_demangle'];
-  assert(__cxa_demangle_func);
-  try {
-    var s =
-      func.substr(1);
-    var len = lengthBytesUTF8(s)+1;
-    var buf = _malloc(len);
-    stringToUTF8(s, buf, len);
-    var status = _malloc(4);
-    var ret = __cxa_demangle_func(buf, 0, 0, status);
-    if (HEAP32[((status)>>2)] === 0 && ret) {
-      return Pointer_stringify(ret);
-    }
-    // otherwise, libcxxabi failed
-  } catch(e) {
-    // ignore problems here
-  } finally {
-    if (buf) _free(buf);
-    if (status) _free(status);
-    if (ret) _free(ret);
-  }
-  // failure when using libcxxabi, don't demangle
-  return func;
-}
-
-function demangleAll(text) {
-  var regex =
-    /__Z[\w\d_]+/g;
-  return text.replace(regex,
-    function(x) {
-      var y = demangle(x);
-      return x === y ? x : (x + ' [' + y + ']');
-    });
-}
-
-function jsStackTrace() {
-  var err = new Error();
-  if (!err.stack) {
-    // IE10+ special cases: It does have callstack info, but it is only populated if an Error object is thrown,
-    // so try that as a special-case.
-    try {
-      throw new Error(0);
-    } catch(e) {
-      err = e;
-    }
-    if (!err.stack) {
-      return '(no stack trace available)';
-    }
-  }
-  return err.stack.toString();
-}
-
-function stackTrace() {
-  var js = jsStackTrace();
-  if (Module['extraStackTrace']) js += '\n' + Module['extraStackTrace']();
-  return demangleAll(js);
-}
-
-// Memory management
-
-var PAGE_SIZE = 16384;
-var WASM_PAGE_SIZE = 65536;
-var ASMJS_PAGE_SIZE = 16777216;
-var MIN_TOTAL_MEMORY = 16777216;
-
-function alignUp(x, multiple) {
-  if (x % multiple > 0) {
-    x += multiple - (x % multiple);
-  }
-  return x;
-}
-
-var HEAP,
-/** @type {ArrayBuffer} */
-  buffer,
-/** @type {Int8Array} */
-  HEAP8,
-/** @type {Uint8Array} */
-  HEAPU8,
-/** @type {Int16Array} */
-  HEAP16,
-/** @type {Uint16Array} */
-  HEAPU16,
-/** @type {Int32Array} */
-  HEAP32,
-/** @type {Uint32Array} */
-  HEAPU32,
-/** @type {Float32Array} */
-  HEAPF32,
-/** @type {Float64Array} */
-  HEAPF64;
-
-function updateGlobalBuffer(buf) {
-  Module['buffer'] = buffer = buf;
-}
-
-function updateGlobalBufferViews() {
-  Module['HEAP8'] = HEAP8 = new Int8Array(buffer);
-  Module['HEAP16'] = HEAP16 = new Int16Array(buffer);
-  Module['HEAP32'] = HEAP32 = new Int32Array(buffer);
-  Module['HEAPU8'] = HEAPU8 = new Uint8Array(buffer);
-  Module['HEAPU16'] = HEAPU16 = new Uint16Array(buffer);
-  Module['HEAPU32'] = HEAPU32 = new Uint32Array(buffer);
-  Module['HEAPF32'] = HEAPF32 = new Float32Array(buffer);
-  Module['HEAPF64'] = HEAPF64 = new Float64Array(buffer);
-}
-
-var STATIC_BASE, STATICTOP, staticSealed; // static area
-var STACK_BASE, STACKTOP, STACK_MAX; // stack area
-var DYNAMIC_BASE, DYNAMICTOP_PTR; // dynamic area handled by sbrk
-
-  STATIC_BASE = STATICTOP = STACK_BASE = STACKTOP = STACK_MAX = DYNAMIC_BASE = DYNAMICTOP_PTR = 0;
-  staticSealed = false;
-
-
-// Initializes the stack cookie. Called at the startup of main and at the startup of each thread in pthreads mode.
-function writeStackCookie() {
-  assert((STACK_MAX & 3) == 0);
-  HEAPU32[(STACK_MAX >> 2)-1] = 0x02135467;
-  HEAPU32[(STACK_MAX >> 2)-2] = 0x89BACDFE;
-}
-
-function checkStackCookie() {
-  if (HEAPU32[(STACK_MAX >> 2)-1] != 0x02135467 || HEAPU32[(STACK_MAX >> 2)-2] != 0x89BACDFE) {
-    abort('Stack overflow! Stack cookie has been overwritten, expected hex dwords 0x89BACDFE and 0x02135467, but received 0x' + HEAPU32[(STACK_MAX >> 2)-2].toString(16) + ' ' + HEAPU32[(STACK_MAX >> 2)-1].toString(16));
-  }
-  // Also test the global address 0 for integrity. This check is not compatible with SAFE_SPLIT_MEMORY though, since that mode already tests all address 0 accesses on its own.
-  if (HEAP32[0] !== 0x63736d65 /* 'emsc' */) throw 'Runtime error: The application has corrupted its heap memory area (address zero)!';
-}
-
-function abortStackOverflow(allocSize) {
-  abort('Stack overflow! Attempted to allocate ' + allocSize + ' bytes on the stack, but stack has only ' + (STACK_MAX - stackSave() + allocSize) + ' bytes available!');
-}
-
-
-function abortOnCannotGrowMemory() {
-  abort('Cannot enlarge memory arrays. Either (1) compile with  -s TOTAL_MEMORY=X  with X higher than the current value ' + TOTAL_MEMORY + ', (2) compile with  -s ALLOW_MEMORY_GROWTH=1  which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with  -s ABORTING_MALLOC=0 ');
-}
-
-if (!Module['reallocBuffer']) Module['reallocBuffer'] = function(size) {
-  var ret;
-  try {
-    if (ArrayBuffer.transfer) {
-      ret = ArrayBuffer.transfer(buffer, size);
-    } else {
-      var oldHEAP8 = HEAP8;
-      ret = new ArrayBuffer(size);
-      var temp = new Int8Array(ret);
-      temp.set(oldHEAP8);
-    }
-  } catch(e) {
-    return false;
-  }
-  var success = _emscripten_replace_memory(ret);
-  if (!success) return false;
-  return ret;
-};
-
-function enlargeMemory() {
-  // TOTAL_MEMORY is the current size of the actual array, and DYNAMICTOP is the new top.
-  assert(HEAP32[DYNAMICTOP_PTR>>2] > TOTAL_MEMORY); // This function should only ever be called after the ceiling of the dynamic heap has already been bumped to exceed the current total size of the asm.js heap.
-
-
-  var PAGE_MULTIPLE = Module["usingWasm"] ? WASM_PAGE_SIZE : ASMJS_PAGE_SIZE; // In wasm, heap size must be a multiple of 64KB. In asm.js, they need to be multiples of 16MB.
-  var LIMIT = 2147483648 - PAGE_MULTIPLE; // We can do one page short of 2GB as theoretical maximum.
-
-  if (HEAP32[DYNAMICTOP_PTR>>2] > LIMIT) {
-    err('Cannot enlarge memory, asked to go up to ' + HEAP32[DYNAMICTOP_PTR>>2] + ' bytes, but the limit is ' + LIMIT + ' bytes!');
-    return false;
-  }
-
-  var OLD_TOTAL_MEMORY = TOTAL_MEMORY;
-  TOTAL_MEMORY = Math.max(TOTAL_MEMORY, MIN_TOTAL_MEMORY); // So the loop below will not be infinite, and minimum asm.js memory size is 16MB.
-
-  while (TOTAL_MEMORY < HEAP32[DYNAMICTOP_PTR>>2]) { // Keep incrementing the heap size as long as it's less than what is requested.
-    if (TOTAL_MEMORY <= 536870912) {
-      TOTAL_MEMORY = alignUp(2 * TOTAL_MEMORY, PAGE_MULTIPLE); // Simple heuristic: double until 1GB...
-    } else {
-      // ..., but after that, add smaller increments towards 2GB, which we cannot reach
-      TOTAL_MEMORY = Math.min(alignUp((3 * TOTAL_MEMORY + 2147483648) / 4, PAGE_MULTIPLE), LIMIT);
-      if (TOTAL_MEMORY === OLD_TOTAL_MEMORY) {
-        warnOnce('Cannot ask for more memory since we reached the practical limit in browsers (which is just below 2GB), so the request would have failed. Requesting only ' + TOTAL_MEMORY);
-      }
-    }
-  }
-
-  var start = Date.now();
-
-  var replacement = Module['reallocBuffer'](TOTAL_MEMORY);
-  if (!replacement || replacement.byteLength != TOTAL_MEMORY) {
-    err('Failed to grow the heap from ' + OLD_TOTAL_MEMORY + ' bytes to ' + TOTAL_MEMORY + ' bytes, not enough memory!');
-    if (replacement) {
-      err('Expected to get back a buffer of size ' + TOTAL_MEMORY + ' bytes, but instead got back a buffer of size ' + replacement.byteLength);
-    }
-    // restore the state to before this call, we failed
-    TOTAL_MEMORY = OLD_TOTAL_MEMORY;
-    return false;
-  }
-
-  // everything worked
-
-  updateGlobalBuffer(replacement);
-  updateGlobalBufferViews();
-
-  if (!Module["usingWasm"]) {
-    err('Warning: Enlarging memory arrays, this is not fast! ' + [OLD_TOTAL_MEMORY, TOTAL_MEMORY]);
-  }
-
-
-  return true;
-}
-
-var byteLength;
-try {
-  byteLength = Function.prototype.call.bind(Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'byteLength').get);
-  byteLength(new ArrayBuffer(4)); // can fail on older ie
-} catch(e) { // can fail on older node/v8
-  byteLength = function(buffer) { return buffer.byteLength; };
-}
-
-var TOTAL_STACK = Module['TOTAL_STACK'] || 5242880;
-var TOTAL_MEMORY = Module['TOTAL_MEMORY'] || 16777216;
-if (TOTAL_MEMORY < TOTAL_STACK) err('TOTAL_MEMORY should be larger than TOTAL_STACK, was ' + TOTAL_MEMORY + '! (TOTAL_STACK=' + TOTAL_STACK + ')');
-
-// Initialize the runtime's memory
-// check for full engine support (use string 'subarray' to avoid closure compiler confusion)
-assert(typeof Int32Array !== 'undefined' && typeof Float64Array !== 'undefined' && Int32Array.prototype.subarray !== undefined && Int32Array.prototype.set !== undefined,
-       'JS engine does not provide full typed array support');
-
-
-
-// Use a provided buffer, if there is one, or else allocate a new one
-if (Module['buffer']) {
-  buffer = Module['buffer'];
-  assert(buffer.byteLength === TOTAL_MEMORY, 'provided buffer should be ' + TOTAL_MEMORY + ' bytes, but it is ' + buffer.byteLength);
-} else {
-  // Use a WebAssembly memory where available
-  if (typeof WebAssembly === 'object' && typeof WebAssembly.Memory === 'function') {
-    assert(TOTAL_MEMORY % WASM_PAGE_SIZE === 0);
-    Module['wasmMemory'] = new WebAssembly.Memory({ 'initial': TOTAL_MEMORY / WASM_PAGE_SIZE });
-    buffer = Module['wasmMemory'].buffer;
-  } else
-  {
-    buffer = new ArrayBuffer(TOTAL_MEMORY);
-  }
-  assert(buffer.byteLength === TOTAL_MEMORY);
-  Module['buffer'] = buffer;
-}
-updateGlobalBufferViews();
-
-
-function getTotalMemory() {
-  return TOTAL_MEMORY;
-}
-
-// Endianness check (note: assumes compiler arch was little-endian)
-  HEAP32[0] = 0x63736d65; /* 'emsc' */
-HEAP16[1] = 0x6373;
-if (HEAPU8[2] !== 0x73 || HEAPU8[3] !== 0x63) throw 'Runtime error: expected the system to be little-endian!';
-
-function callRuntimeCallbacks(callbacks) {
-  while(callbacks.length > 0) {
-    var callback = callbacks.shift();
-    if (typeof callback == 'function') {
-      callback();
-      continue;
-    }
-    var func = callback.func;
-    if (typeof func === 'number') {
-      if (callback.arg === undefined) {
-        Module['dynCall_v'](func);
-      } else {
-        Module['dynCall_vi'](func, callback.arg);
-      }
-    } else {
-      func(callback.arg === undefined ? null : callback.arg);
-    }
-  }
-}
-
-var __ATPRERUN__  = []; // functions called before the runtime is initialized
-var __ATINIT__    = []; // functions called during startup
-var __ATMAIN__    = []; // functions called when main() is to be run
-var __ATEXIT__    = []; // functions called during shutdown
-var __ATPOSTRUN__ = []; // functions called after the main() is called
-
-var runtimeInitialized = false;
-var runtimeExited = false;
-
-
-function preRun() {
-  // compatibility - merge in anything from Module['preRun'] at this time
-  if (Module['preRun']) {
-    if (typeof Module['preRun'] == 'function') Module['preRun'] = [Module['preRun']];
-    while (Module['preRun'].length) {
-      addOnPreRun(Module['preRun'].shift());
-    }
-  }
-  callRuntimeCallbacks(__ATPRERUN__);
-}
-
-function ensureInitRuntime() {
-  checkStackCookie();
-  if (runtimeInitialized) return;
-  runtimeInitialized = true;
-  callRuntimeCallbacks(__ATINIT__);
-}
-
-function preMain() {
-  checkStackCookie();
-  callRuntimeCallbacks(__ATMAIN__);
-}
-
-function exitRuntime() {
-  checkStackCookie();
-  callRuntimeCallbacks(__ATEXIT__);
-  runtimeExited = true;
-}
-
-function postRun() {
-  checkStackCookie();
-  // compatibility - merge in anything from Module['postRun'] at this time
-  if (Module['postRun']) {
-    if (typeof Module['postRun'] == 'function') Module['postRun'] = [Module['postRun']];
-    while (Module['postRun'].length) {
-      addOnPostRun(Module['postRun'].shift());
-    }
-  }
-  callRuntimeCallbacks(__ATPOSTRUN__);
-}
-
-function addOnPreRun(cb) {
-  __ATPRERUN__.unshift(cb);
-}
-
-function addOnInit(cb) {
-  __ATINIT__.unshift(cb);
-}
-
-function addOnPreMain(cb) {
-  __ATMAIN__.unshift(cb);
-}
-
-function addOnExit(cb) {
-  __ATEXIT__.unshift(cb);
-}
-
-function addOnPostRun(cb) {
-  __ATPOSTRUN__.unshift(cb);
-}
-
 // Deprecated: This function should not be called because it is unsafe and does not provide
 // a maximum length limit of how many bytes it is allowed to write. Prefer calling the
 // function stringToUTF8Array() instead, which takes in a maximum length that can be used
@@ -1367,6 +1173,244 @@ function writeAsciiToMemory(str, buffer, dontAddNull) {
   if (!dontAddNull) HEAP8[((buffer)>>0)]=0;
 }
 
+
+
+
+// Memory management
+
+var PAGE_SIZE = 16384;
+var WASM_PAGE_SIZE = 65536;
+var ASMJS_PAGE_SIZE = 16777216;
+
+function alignUp(x, multiple) {
+  if (x % multiple > 0) {
+    x += multiple - (x % multiple);
+  }
+  return x;
+}
+
+var HEAP,
+/** @type {ArrayBuffer} */
+  buffer,
+/** @type {Int8Array} */
+  HEAP8,
+/** @type {Uint8Array} */
+  HEAPU8,
+/** @type {Int16Array} */
+  HEAP16,
+/** @type {Uint16Array} */
+  HEAPU16,
+/** @type {Int32Array} */
+  HEAP32,
+/** @type {Uint32Array} */
+  HEAPU32,
+/** @type {Float32Array} */
+  HEAPF32,
+/** @type {Float64Array} */
+  HEAPF64;
+
+function updateGlobalBufferViews() {
+  Module['HEAP8'] = HEAP8 = new Int8Array(buffer);
+  Module['HEAP16'] = HEAP16 = new Int16Array(buffer);
+  Module['HEAP32'] = HEAP32 = new Int32Array(buffer);
+  Module['HEAPU8'] = HEAPU8 = new Uint8Array(buffer);
+  Module['HEAPU16'] = HEAPU16 = new Uint16Array(buffer);
+  Module['HEAPU32'] = HEAPU32 = new Uint32Array(buffer);
+  Module['HEAPF32'] = HEAPF32 = new Float32Array(buffer);
+  Module['HEAPF64'] = HEAPF64 = new Float64Array(buffer);
+}
+
+
+var STATIC_BASE = 1024,
+    STACK_BASE = 128960,
+    STACKTOP = STACK_BASE,
+    STACK_MAX = 5371840,
+    DYNAMIC_BASE = 5371840,
+    DYNAMICTOP_PTR = 128928;
+
+assert(STACK_BASE % 16 === 0, 'stack must start aligned');
+assert(DYNAMIC_BASE % 16 === 0, 'heap must start aligned');
+
+
+
+var TOTAL_STACK = 5242880;
+if (Module['TOTAL_STACK']) assert(TOTAL_STACK === Module['TOTAL_STACK'], 'the stack size can no longer be determined at runtime')
+
+var INITIAL_TOTAL_MEMORY = Module['TOTAL_MEMORY'] || 16777216;if (!Object.getOwnPropertyDescriptor(Module, 'TOTAL_MEMORY')) Object.defineProperty(Module, 'TOTAL_MEMORY', { get: function() { abort('Module.TOTAL_MEMORY has been replaced with plain INITIAL_TOTAL_MEMORY') } });
+
+assert(INITIAL_TOTAL_MEMORY >= TOTAL_STACK, 'TOTAL_MEMORY should be larger than TOTAL_STACK, was ' + INITIAL_TOTAL_MEMORY + '! (TOTAL_STACK=' + TOTAL_STACK + ')');
+
+// check for full engine support (use string 'subarray' to avoid closure compiler confusion)
+assert(typeof Int32Array !== 'undefined' && typeof Float64Array !== 'undefined' && Int32Array.prototype.subarray !== undefined && Int32Array.prototype.set !== undefined,
+       'JS engine does not provide full typed array support');
+
+
+
+
+
+
+
+  if (Module['wasmMemory']) {
+    wasmMemory = Module['wasmMemory'];
+  } else
+  {
+    wasmMemory = new WebAssembly.Memory({
+      'initial': INITIAL_TOTAL_MEMORY / WASM_PAGE_SIZE
+    });
+  }
+
+
+if (wasmMemory) {
+  buffer = wasmMemory.buffer;
+}
+
+// If the user provides an incorrect length, just use that length instead rather than providing the user to
+// specifically provide the memory length with Module['TOTAL_MEMORY'].
+INITIAL_TOTAL_MEMORY = buffer.byteLength;
+assert(INITIAL_TOTAL_MEMORY % WASM_PAGE_SIZE === 0);
+updateGlobalBufferViews();
+
+HEAP32[DYNAMICTOP_PTR>>2] = DYNAMIC_BASE;
+
+
+// Initializes the stack cookie. Called at the startup of main and at the startup of each thread in pthreads mode.
+function writeStackCookie() {
+  assert((STACK_MAX & 3) == 0);
+  HEAPU32[(STACK_MAX >> 2)-1] = 0x02135467;
+  HEAPU32[(STACK_MAX >> 2)-2] = 0x89BACDFE;
+}
+
+function checkStackCookie() {
+  var cookie1 = HEAPU32[(STACK_MAX >> 2)-1];
+  var cookie2 = HEAPU32[(STACK_MAX >> 2)-2];
+  if (cookie1 != 0x02135467 || cookie2 != 0x89BACDFE) {
+    abort('Stack overflow! Stack cookie has been overwritten, expected hex dwords 0x89BACDFE and 0x02135467, but received 0x' + cookie2.toString(16) + ' ' + cookie1.toString(16));
+  }
+  // Also test the global address 0 for integrity.
+  // We don't do this with ASan because ASan does its own checks for this.
+  if (HEAP32[0] !== 0x63736d65 /* 'emsc' */) abort('Runtime error: The application has corrupted its heap memory area (address zero)!');
+}
+
+function abortStackOverflow(allocSize) {
+  abort('Stack overflow! Attempted to allocate ' + allocSize + ' bytes on the stack, but stack has only ' + (STACK_MAX - stackSave() + allocSize) + ' bytes available!');
+}
+
+
+  HEAP32[0] = 0x63736d65; /* 'emsc' */
+
+
+
+// Endianness check (note: assumes compiler arch was little-endian)
+HEAP16[1] = 0x6373;
+if (HEAPU8[2] !== 0x73 || HEAPU8[3] !== 0x63) throw 'Runtime error: expected the system to be little-endian!';
+
+function abortFnPtrError(ptr, sig) {
+	var possibleSig = '';
+	for(var x in debug_tables) {
+		var tbl = debug_tables[x];
+		if (tbl[ptr]) {
+			possibleSig += 'as sig "' + x + '" pointing to function ' + tbl[ptr] + ', ';
+		}
+	}
+	abort("Invalid function pointer " + ptr + " called with signature '" + sig + "'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this). This pointer might make sense in another type signature: " + possibleSig);
+}
+
+
+
+function callRuntimeCallbacks(callbacks) {
+  while(callbacks.length > 0) {
+    var callback = callbacks.shift();
+    if (typeof callback == 'function') {
+      callback();
+      continue;
+    }
+    var func = callback.func;
+    if (typeof func === 'number') {
+      if (callback.arg === undefined) {
+        Module['dynCall_v'](func);
+      } else {
+        Module['dynCall_vi'](func, callback.arg);
+      }
+    } else {
+      func(callback.arg === undefined ? null : callback.arg);
+    }
+  }
+}
+
+var __ATPRERUN__  = []; // functions called before the runtime is initialized
+var __ATINIT__    = []; // functions called during startup
+var __ATMAIN__    = []; // functions called when main() is to be run
+var __ATEXIT__    = []; // functions called during shutdown
+var __ATPOSTRUN__ = []; // functions called after the main() is called
+
+var runtimeInitialized = false;
+var runtimeExited = false;
+
+
+function preRun() {
+
+  if (Module['preRun']) {
+    if (typeof Module['preRun'] == 'function') Module['preRun'] = [Module['preRun']];
+    while (Module['preRun'].length) {
+      addOnPreRun(Module['preRun'].shift());
+    }
+  }
+
+  callRuntimeCallbacks(__ATPRERUN__);
+}
+
+function initRuntime() {
+  checkStackCookie();
+  assert(!runtimeInitialized);
+  runtimeInitialized = true;
+  if (!Module["noFSInit"] && !FS.init.initialized) FS.init();
+TTY.init();
+  callRuntimeCallbacks(__ATINIT__);
+}
+
+function preMain() {
+  checkStackCookie();
+  FS.ignorePermissions = false;
+  callRuntimeCallbacks(__ATMAIN__);
+}
+
+function exitRuntime() {
+  checkStackCookie();
+  runtimeExited = true;
+}
+
+function postRun() {
+  checkStackCookie();
+
+  if (Module['postRun']) {
+    if (typeof Module['postRun'] == 'function') Module['postRun'] = [Module['postRun']];
+    while (Module['postRun'].length) {
+      addOnPostRun(Module['postRun'].shift());
+    }
+  }
+
+  callRuntimeCallbacks(__ATPOSTRUN__);
+}
+
+function addOnPreRun(cb) {
+  __ATPRERUN__.unshift(cb);
+}
+
+function addOnInit(cb) {
+  __ATINIT__.unshift(cb);
+}
+
+function addOnPreMain(cb) {
+  __ATMAIN__.unshift(cb);
+}
+
+function addOnExit(cb) {
+}
+
+function addOnPostRun(cb) {
+  __ATPOSTRUN__.unshift(cb);
+}
+
 function unSign(value, bits, ignore) {
   if (value >= 0) {
     return value;
@@ -1388,7 +1432,11 @@ function reSign(value, bits, ignore) {
   return value;
 }
 
-assert(Math['imul'] && Math['fround'] && Math['clz32'] && Math['trunc'], 'this is a legacy browser, build with LEGACY_VM_SUPPORT');
+
+assert(Math.imul, 'This browser does not support Math.imul(), build with LEGACY_VM_SUPPORT or POLYFILL_OLD_MATH_FUNCTIONS to add in a polyfill');
+assert(Math.fround, 'This browser does not support Math.fround(), build with LEGACY_VM_SUPPORT or POLYFILL_OLD_MATH_FUNCTIONS to add in a polyfill');
+assert(Math.clz32, 'This browser does not support Math.clz32(), build with LEGACY_VM_SUPPORT or POLYFILL_OLD_MATH_FUNCTIONS to add in a polyfill');
+assert(Math.trunc, 'This browser does not support Math.trunc(), build with LEGACY_VM_SUPPORT or POLYFILL_OLD_MATH_FUNCTIONS to add in a polyfill');
 
 var Math_abs = Math.abs;
 var Math_cos = Math.cos;
@@ -1412,10 +1460,12 @@ var Math_max = Math.max;
 var Math_clz32 = Math.clz32;
 var Math_trunc = Math.trunc;
 
+
+
 // A counter of dependencies for calling run(). If we need to
 // do asynchronous work before running, increment this and
 // decrement it. Incrementing must happen in a place like
-// PRE_RUN_ADDITIONS (used by emcc to add file preloading).
+// Module.preRun (used by emcc to add file preloading).
 // Note that you can add dependencies in preRun, even though
 // it happens right before run - run will be postponed until
 // the dependencies are met.
@@ -1435,9 +1485,11 @@ function getUniqueRunDependency(id) {
 
 function addRunDependency(id) {
   runDependencies++;
+
   if (Module['monitorRunDependencies']) {
     Module['monitorRunDependencies'](runDependencies);
   }
+
   if (id) {
     assert(!runDependencyTracking[id]);
     runDependencyTracking[id] = 1;
@@ -1469,9 +1521,11 @@ function addRunDependency(id) {
 
 function removeRunDependency(id) {
   runDependencies--;
+
   if (Module['monitorRunDependencies']) {
     Module['monitorRunDependencies'](runDependencies);
   }
+
   if (id) {
     assert(runDependencyTracking[id]);
     delete runDependencyTracking[id];
@@ -1495,13 +1549,18 @@ Module["preloadedImages"] = {}; // maps url to image data
 Module["preloadedAudios"] = {}; // maps url to audio data
 
 
-
 var memoryInitializer = null;
 
 
 
 
 
+
+
+// Copyright 2017 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
 
 // Prefix of data URIs emitted by SINGLE_FILE and related options.
 var dataURIPrefix = 'data:application/octet-stream;base64,';
@@ -1516,281 +1575,165 @@ function isDataURI(filename) {
 
 
 
-function integrateWasmJS() {
-  // wasm.js has several methods for creating the compiled code module here:
-  //  * 'native-wasm' : use native WebAssembly support in the browser
-  //  * 'interpret-s-expr': load s-expression code from a .wast and interpret
-  //  * 'interpret-binary': load binary wasm and interpret
-  //  * 'interpret-asm2wasm': load asm.js code, translate to wasm, and interpret
-  //  * 'asmjs': no wasm, just load the asm.js code and use that (good for testing)
-  // The method is set at compile time (BINARYEN_METHOD)
-  // The method can be a comma-separated list, in which case, we will try the
-  // options one by one. Some of them can fail gracefully, and then we can try
-  // the next.
+var wasmBinaryFile = 'bindings.wasm';
+if (!isDataURI(wasmBinaryFile)) {
+  wasmBinaryFile = locateFile(wasmBinaryFile);
+}
 
-  // inputs
-
-  var method = 'native-wasm';
-
-  var wasmTextFile = 'bindings.wast';
-  var wasmBinaryFile = 'bindings.wasm';
-  var asmjsCodeFile = 'bindings.temp.asm.js';
-
-  if (typeof Module['locateFile'] === 'function') {
-    if (!isDataURI(wasmTextFile)) {
-      wasmTextFile = Module['locateFile'](wasmTextFile);
+function getBinary() {
+  try {
+    if (wasmBinary) {
+      return new Uint8Array(wasmBinary);
     }
-    if (!isDataURI(wasmBinaryFile)) {
-      wasmBinaryFile = Module['locateFile'](wasmBinaryFile);
-    }
-    if (!isDataURI(asmjsCodeFile)) {
-      asmjsCodeFile = Module['locateFile'](asmjsCodeFile);
+
+    if (readBinary) {
+      return readBinary(wasmBinaryFile);
+    } else {
+      throw "both async and sync fetching of the wasm failed";
     }
   }
+  catch (err) {
+    abort(err);
+  }
+}
 
-  // utilities
+function getBinaryPromise() {
+  // if we don't have the binary yet, and have the Fetch api, use that
+  // in some environments, like Electron's render process, Fetch api may be present, but have a different context than expected, let's only use it on the Web
+  if (!wasmBinary && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === 'function') {
+    return fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function(response) {
+      if (!response['ok']) {
+        throw "failed to load wasm binary file at '" + wasmBinaryFile + "'";
+      }
+      return response['arrayBuffer']();
+    }).catch(function () {
+      return getBinary();
+    });
+  }
+  // Otherwise, getBinary should be able to get it synchronously
+  return new Promise(function(resolve, reject) {
+    resolve(getBinary());
+  });
+}
 
-  var wasmPageSize = 64*1024;
 
+
+// Create the wasm instance.
+// Receives the wasm imports, returns the exports.
+function createWasm(env) {
+
+  // prepare imports
   var info = {
-    'global': null,
-    'env': null,
-    'asm2wasm': asm2wasmImports,
-    'parent': Module // Module inside wasm-js.cpp refers to wasm-js.cpp; this allows access to the outside program.
+    'env': env
+    ,
+    'global': {
+      'NaN': NaN,
+      'Infinity': Infinity
+    },
+    'global.Math': Math,
+    'asm2wasm': asm2wasmImports
   };
-
-  var exports = null;
-
-
-  function mergeMemory(newBuffer) {
-    // The wasm instance creates its memory. But static init code might have written to
-    // buffer already, including the mem init file, and we must copy it over in a proper merge.
-    // TODO: avoid this copy, by avoiding such static init writes
-    // TODO: in shorter term, just copy up to the last static init write
-    var oldBuffer = Module['buffer'];
-    if (newBuffer.byteLength < oldBuffer.byteLength) {
-      err('the new buffer in mergeMemory is smaller than the previous one. in native wasm, we should grow memory here');
-    }
-    var oldView = new Int8Array(oldBuffer);
-    var newView = new Int8Array(newBuffer);
+  // Load the wasm module and create an instance of using native support in the JS engine.
+  // handle a generated wasm instance, receiving its exports and
+  // performing other necessary setup
+  function receiveInstance(instance, module) {
+    var exports = instance.exports;
+    Module['asm'] = exports;
+    removeRunDependency('wasm-instantiate');
+  }
+   // we can't run yet (except in a pthread, where we have a custom sync instantiator)
+  addRunDependency('wasm-instantiate');
 
 
-    newView.set(oldView);
-    updateGlobalBuffer(newBuffer);
-    updateGlobalBufferViews();
+  // Async compilation can be confusing when an error on the page overwrites Module
+  // (for example, if the order of elements is wrong, and the one defining Module is
+  // later), so we save Module and check it later.
+  var trueModule = Module;
+  function receiveInstantiatedSource(output) {
+    // 'output' is a WebAssemblyInstantiatedSource object which has both the module and instance.
+    // receiveInstance() will swap in the exports (to Module.asm) so they can be called
+    assert(Module === trueModule, 'the Module object should not be replaced during async compilation - perhaps the order of HTML elements is wrong?');
+    trueModule = null;
+      // TODO: Due to Closure regression https://github.com/google/closure-compiler/issues/3193, the above line no longer optimizes out down to the following line.
+      // When the regression is fixed, can restore the above USE_PTHREADS-enabled path.
+    receiveInstance(output['instance']);
   }
 
-  function fixImports(imports) {
-    return imports;
-  }
 
-  function getBinary() {
-    try {
-      if (Module['wasmBinary']) {
-        return new Uint8Array(Module['wasmBinary']);
-      }
-      if (Module['readBinary']) {
-        return Module['readBinary'](wasmBinaryFile);
-      } else {
-        throw "on the web, we need the wasm binary to be preloaded and set on Module['wasmBinary']. emcc.py will do that for you when generating HTML (but not JS)";
-      }
-    }
-    catch (err) {
-      abort(err);
-    }
-  }
-
-  function getBinaryPromise() {
-    // if we don't have the binary yet, and have the Fetch api, use that
-    // in some environments, like Electron's render process, Fetch api may be present, but have a different context than expected, let's only use it on the Web
-    if (!Module['wasmBinary'] && (ENVIRONMENT_IS_WEB || ENVIRONMENT_IS_WORKER) && typeof fetch === 'function') {
-      return fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function(response) {
-        if (!response['ok']) {
-          throw "failed to load wasm binary file at '" + wasmBinaryFile + "'";
-        }
-        return response['arrayBuffer']();
-      }).catch(function () {
-        return getBinary();
-      });
-    }
-    // Otherwise, getBinary should be able to get it synchronously
-    return new Promise(function(resolve, reject) {
-      resolve(getBinary());
+  function instantiateArrayBuffer(receiver) {
+    return getBinaryPromise().then(function(binary) {
+      return WebAssembly.instantiate(binary, info);
+    }).then(receiver, function(reason) {
+      err('failed to asynchronously prepare wasm: ' + reason);
+      abort(reason);
     });
   }
 
-  // do-method functions
-
-
-  function doNativeWasm(global, env, providedBuffer) {
-    if (typeof WebAssembly !== 'object') {
-      // when the method is just native-wasm, our error message can be very specific
-      abort('No WebAssembly support found. Build with -s WASM=0 to target JavaScript instead.');
-      err('no native wasm support detected');
-      return false;
-    }
-    // prepare memory import
-    if (!(Module['wasmMemory'] instanceof WebAssembly.Memory)) {
-      err('no native wasm Memory in use');
-      return false;
-    }
-    env['memory'] = Module['wasmMemory'];
-    // Load the wasm module and create an instance of using native support in the JS engine.
-    info['global'] = {
-      'NaN': NaN,
-      'Infinity': Infinity
-    };
-    info['global.Math'] = Math;
-    info['env'] = env;
-    // handle a generated wasm instance, receiving its exports and
-    // performing other necessary setup
-    function receiveInstance(instance, module) {
-      exports = instance.exports;
-      if (exports.memory) mergeMemory(exports.memory);
-      Module['asm'] = exports;
-      Module["usingWasm"] = true;
-      removeRunDependency('wasm-instantiate');
-    }
-    addRunDependency('wasm-instantiate');
-
-    // User shell pages can write their own Module.instantiateWasm = function(imports, successCallback) callback
-    // to manually instantiate the Wasm module themselves. This allows pages to run the instantiation parallel
-    // to any other async startup actions they are performing.
-    if (Module['instantiateWasm']) {
-      try {
-        return Module['instantiateWasm'](info, receiveInstance);
-      } catch(e) {
-        err('Module.instantiateWasm callback failed with error: ' + e);
-        return false;
-      }
-    }
-
-    // Async compilation can be confusing when an error on the page overwrites Module
-    // (for example, if the order of elements is wrong, and the one defining Module is
-    // later), so we save Module and check it later.
-    var trueModule = Module;
-    function receiveInstantiatedSource(output) {
-      // 'output' is a WebAssemblyInstantiatedSource object which has both the module and instance.
-      // receiveInstance() will swap in the exports (to Module.asm) so they can be called
-      assert(Module === trueModule, 'the Module object should not be replaced during async compilation - perhaps the order of HTML elements is wrong?');
-      trueModule = null;
-      receiveInstance(output['instance'], output['module']);
-    }
-    function instantiateArrayBuffer(receiver) {
-      getBinaryPromise().then(function(binary) {
-        return WebAssembly.instantiate(binary, info);
-      }).then(receiver).catch(function(reason) {
-        err('failed to asynchronously prepare wasm: ' + reason);
-        abort(reason);
-      });
-    }
-    // Prefer streaming instantiation if available.
-    if (!Module['wasmBinary'] &&
+  // Prefer streaming instantiation if available.
+  function instantiateAsync() {
+    if (!wasmBinary &&
         typeof WebAssembly.instantiateStreaming === 'function' &&
         !isDataURI(wasmBinaryFile) &&
         typeof fetch === 'function') {
-      WebAssembly.instantiateStreaming(fetch(wasmBinaryFile, { credentials: 'same-origin' }), info)
-        .then(receiveInstantiatedSource)
-        .catch(function(reason) {
-          // We expect the most common failure cause to be a bad MIME type for the binary,
-          // in which case falling back to ArrayBuffer instantiation should work.
-          err('wasm streaming compile failed: ' + reason);
-          err('falling back to ArrayBuffer instantiation');
-          instantiateArrayBuffer(receiveInstantiatedSource);
-        });
+      fetch(wasmBinaryFile, { credentials: 'same-origin' }).then(function (response) {
+        var result = WebAssembly.instantiateStreaming(response, info);
+        return result.then(receiveInstantiatedSource, function(reason) {
+            // We expect the most common failure cause to be a bad MIME type for the binary,
+            // in which case falling back to ArrayBuffer instantiation should work.
+            err('wasm streaming compile failed: ' + reason);
+            err('falling back to ArrayBuffer instantiation');
+            instantiateArrayBuffer(receiveInstantiatedSource);
+          });
+      });
     } else {
-      instantiateArrayBuffer(receiveInstantiatedSource);
+      return instantiateArrayBuffer(receiveInstantiatedSource);
     }
-    return {}; // no exports yet; we'll fill them in later
+  }
+  // User shell pages can write their own Module.instantiateWasm = function(imports, successCallback) callback
+  // to manually instantiate the Wasm module themselves. This allows pages to run the instantiation parallel
+  // to any other async startup actions they are performing.
+  if (Module['instantiateWasm']) {
+    try {
+      var exports = Module['instantiateWasm'](info, receiveInstance);
+      return exports;
+    } catch(e) {
+      err('Module.instantiateWasm callback failed with error: ' + e);
+      return false;
+    }
   }
 
-
-  // We may have a preloaded value in Module.asm, save it
-  Module['asmPreload'] = Module['asm'];
-
-  // Memory growth integration code
-
-  var asmjsReallocBuffer = Module['reallocBuffer'];
-
-  var wasmReallocBuffer = function(size) {
-    var PAGE_MULTIPLE = Module["usingWasm"] ? WASM_PAGE_SIZE : ASMJS_PAGE_SIZE; // In wasm, heap size must be a multiple of 64KB. In asm.js, they need to be multiples of 16MB.
-    size = alignUp(size, PAGE_MULTIPLE); // round up to wasm page size
-    var old = Module['buffer'];
-    var oldSize = old.byteLength;
-    if (Module["usingWasm"]) {
-      // native wasm support
-      try {
-        var result = Module['wasmMemory'].grow((size - oldSize) / wasmPageSize); // .grow() takes a delta compared to the previous size
-        if (result !== (-1 | 0)) {
-          // success in native wasm memory growth, get the buffer from the memory
-          return Module['buffer'] = Module['wasmMemory'].buffer;
-        } else {
-          return null;
-        }
-      } catch(e) {
-        console.error('Module.reallocBuffer: Attempted to grow from ' + oldSize  + ' bytes to ' + size + ' bytes, but got error: ' + e);
-        return null;
-      }
-    }
-  };
-
-  Module['reallocBuffer'] = function(size) {
-    if (finalMethod === 'asmjs') {
-      return asmjsReallocBuffer(size);
-    } else {
-      return wasmReallocBuffer(size);
-    }
-  };
-
-  // we may try more than one; this is the final one, that worked and we are using
-  var finalMethod = '';
-
-  // Provide an "asm.js function" for the application, called to "link" the asm.js module. We instantiate
-  // the wasm module at that time, and it receives imports and provides exports and so forth, the app
-  // doesn't need to care that it is wasm or olyfilled wasm or asm.js.
-
-  Module['asm'] = function(global, env, providedBuffer) {
-    env = fixImports(env);
-
-    // import table
-    if (!env['table']) {
-      var TABLE_SIZE = Module['wasmTableSize'];
-      if (TABLE_SIZE === undefined) TABLE_SIZE = 1024; // works in binaryen interpreter at least
-      var MAX_TABLE_SIZE = Module['wasmMaxTableSize'];
-      if (typeof WebAssembly === 'object' && typeof WebAssembly.Table === 'function') {
-        if (MAX_TABLE_SIZE !== undefined) {
-          env['table'] = new WebAssembly.Table({ 'initial': TABLE_SIZE, 'maximum': MAX_TABLE_SIZE, 'element': 'anyfunc' });
-        } else {
-          env['table'] = new WebAssembly.Table({ 'initial': TABLE_SIZE, element: 'anyfunc' });
-        }
-      } else {
-        env['table'] = new Array(TABLE_SIZE); // works in binaryen interpreter at least
-      }
-      Module['wasmTable'] = env['table'];
-    }
-
-    if (!env['memoryBase']) {
-      env['memoryBase'] = Module['STATIC_BASE']; // tell the memory segments where to place themselves
-    }
-    if (!env['tableBase']) {
-      env['tableBase'] = 0; // table starts at 0 by default, in dynamic linking this will change
-    }
-
-    // try the methods. each should return the exports if it succeeded
-
-    var exports;
-    exports = doNativeWasm(global, env, providedBuffer);
-
-    assert(exports, 'no binaryen method succeeded. consider enabling more options, like interpreting, if you want that: https://github.com/kripken/emscripten/wiki/WebAssembly#binaryen-methods');
-
-
-    return exports;
-  };
-
-  var methodHandler = Module['asm']; // note our method handler, as we may modify Module['asm'] later
+  instantiateAsync();
+  return {}; // no exports yet; we'll fill them in later
 }
 
-integrateWasmJS();
+// Provide an "asm.js function" for the application, called to "link" the asm.js module. We instantiate
+// the wasm module at that time, and it receives imports and provides exports and so forth, the app
+// doesn't need to care that it is wasm or asm.js.
+
+Module['asm'] = function(global, env, providedBuffer) {
+  // memory was already allocated (so js could use the buffer)
+  env['memory'] = wasmMemory
+  ;
+  // import table
+  env['table'] = wasmTable = new WebAssembly.Table({
+    'initial': 1404,
+    'maximum': 1404,
+    'element': 'anyfunc'
+  });
+  // With the wasm backend __memory_base and __table_base and only needed for
+  // relocatable output.
+  env['__memory_base'] = 1024; // tell the memory segments where to place themselves
+  // table starts at 0 by default (even in dynamic linking, for the main module)
+  env['__table_base'] = 0;
+
+  var exports = createWasm(env);
+  assert(exports, 'binaryen setup failed (no wasm support?)');
+  return exports;
+};
+
+// Globals used by JS i64 conversions
+var tempDouble;
+var tempI64;
 
 // === Body ===
 
@@ -1800,10 +1743,8 @@ var ASM_CONSTS = [];
 
 
 
-STATIC_BASE = GLOBAL_BASE;
-
-STATICTOP = STATIC_BASE + 119680;
-/* global initializers */  __ATINIT__.push({ func: function() { __GLOBAL__sub_I_bindings_cc() } }, { func: function() { __GLOBAL__sub_I_bind_cpp() } }, { func: function() { ___emscripten_environ_constructor() } });
+// STATICTOP = STATIC_BASE + 127936;
+/* global initializers */  __ATINIT__.push({ func: function() { globalCtors() } });
 
 
 
@@ -1811,52 +1752,94 @@ STATICTOP = STATIC_BASE + 119680;
 
 
 
-var STATIC_BUMP = 119680;
-Module["STATIC_BASE"] = STATIC_BASE;
-Module["STATIC_BUMP"] = STATIC_BUMP;
 
 /* no memory initializer */
-var tempDoublePtr = STATICTOP; STATICTOP += 16;
-
+var tempDoublePtr = 128944
 assert(tempDoublePtr % 8 == 0);
 
 function copyTempFloat(ptr) { // functions, because inlining this code increases code size too much
-
   HEAP8[tempDoublePtr] = HEAP8[ptr];
-
   HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];
-
   HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];
-
   HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];
-
 }
 
 function copyTempDouble(ptr) {
-
   HEAP8[tempDoublePtr] = HEAP8[ptr];
-
   HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];
-
   HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];
-
   HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];
-
   HEAP8[tempDoublePtr+4] = HEAP8[ptr+4];
-
   HEAP8[tempDoublePtr+5] = HEAP8[ptr+5];
-
   HEAP8[tempDoublePtr+6] = HEAP8[ptr+6];
-
   HEAP8[tempDoublePtr+7] = HEAP8[ptr+7];
-
 }
 
 // {{PRE_LIBRARY}}
 
 
+  function demangle(func) {
+      var __cxa_demangle_func = Module['___cxa_demangle'] || Module['__cxa_demangle'];
+      assert(__cxa_demangle_func);
+      try {
+        var s = func;
+        if (s.startsWith('__Z'))
+          s = s.substr(1);
+        var len = lengthBytesUTF8(s)+1;
+        var buf = _malloc(len);
+        stringToUTF8(s, buf, len);
+        var status = _malloc(4);
+        var ret = __cxa_demangle_func(buf, 0, 0, status);
+        if (HEAP32[((status)>>2)] === 0 && ret) {
+          return UTF8ToString(ret);
+        }
+        // otherwise, libcxxabi failed
+      } catch(e) {
+        // ignore problems here
+      } finally {
+        if (buf) _free(buf);
+        if (status) _free(status);
+        if (ret) _free(ret);
+      }
+      // failure when using libcxxabi, don't demangle
+      return func;
+    }
+
+  function demangleAll(text) {
+      var regex =
+        /\b__Z[\w\d_]+/g;
+      return text.replace(regex,
+        function(x) {
+          var y = demangle(x);
+          return x === y ? x : (y + ' [' + x + ']');
+        });
+    }
+
+  function jsStackTrace() {
+      var err = new Error();
+      if (!err.stack) {
+        // IE10+ special cases: It does have callstack info, but it is only populated if an Error object is thrown,
+        // so try that as a special-case.
+        try {
+          throw new Error(0);
+        } catch(e) {
+          err = e;
+        }
+        if (!err.stack) {
+          return '(no stack trace available)';
+        }
+      }
+      return err.stack.toString();
+    }
+
+  function stackTrace() {
+      var js = jsStackTrace();
+      if (Module['extraStackTrace']) js += '\n' + Module['extraStackTrace']();
+      return demangleAll(js);
+    }
+
   function ___assert_fail(condition, filename, line, func) {
-      abort('Assertion failed: ' + Pointer_stringify(condition) + ', at: ' + [filename ? Pointer_stringify(filename) : 'unknown filename', line, func ? Pointer_stringify(func) : 'unknown function']);
+      abort('Assertion failed: ' + UTF8ToString(condition) + ', at: ' + [filename ? UTF8ToString(filename) : 'unknown filename', line, func ? UTF8ToString(func) : 'unknown function']);
     }
 
   
@@ -1876,7 +1859,9 @@ function copyTempDouble(ptr) {
         ENV['PWD'] = '/';
         ENV['HOME'] = '/home/web_user';
         ENV['LANG'] = 'C.UTF-8';
-        ENV['_'] = Module['thisProgram'];
+        // Browser language detection #8751
+        ENV['LANG'] = ((typeof navigator === 'object' && navigator.languages && navigator.languages[0]) || 'C').replace('-', '_') + '.UTF-8';
+        ENV['_'] = thisProgram;
         // Allocate memory.
         poolPtr = getMemory(TOTAL_ENV_SIZE);
         envPtr = getMemory(MAX_ENV_VALUES * 4);
@@ -1917,151 +1902,69 @@ function copyTempDouble(ptr) {
     }
 
   
-  var EXCEPTIONS={last:0,caught:[],infos:{},deAdjust:function (adjusted) {
-        if (!adjusted || EXCEPTIONS.infos[adjusted]) return adjusted;
-        for (var key in EXCEPTIONS.infos) {
-          var ptr = +key; // the iteration key is a string, and if we throw this, it must be an integer as that is what we look for
-          var info = EXCEPTIONS.infos[ptr];
-          if (info.adjusted === adjusted) {
+  var ___exception_infos={};
+  
+  var ___exception_caught= [];
+  
+  function ___exception_addRef(ptr) {
+      if (!ptr) return;
+      var info = ___exception_infos[ptr];
+      info.refcount++;
+    }
+  
+  function ___exception_deAdjust(adjusted) {
+      if (!adjusted || ___exception_infos[adjusted]) return adjusted;
+      for (var key in ___exception_infos) {
+        var ptr = +key; // the iteration key is a string, and if we throw this, it must be an integer as that is what we look for
+        var adj = ___exception_infos[ptr].adjusted;
+        var len = adj.length;
+        for (var i = 0; i < len; i++) {
+          if (adj[i] === adjusted) {
             return ptr;
           }
         }
-        return adjusted;
-      },addRef:function (ptr) {
-        if (!ptr) return;
-        var info = EXCEPTIONS.infos[ptr];
-        info.refcount++;
-      },decRef:function (ptr) {
-        if (!ptr) return;
-        var info = EXCEPTIONS.infos[ptr];
-        assert(info.refcount > 0);
-        info.refcount--;
-        // A rethrown exception can reach refcount 0; it must not be discarded
-        // Its next handler will clear the rethrown flag and addRef it, prior to
-        // final decRef and destruction here
-        if (info.refcount === 0 && !info.rethrown) {
-          if (info.destructor) {
-            Module['dynCall_vi'](info.destructor, ptr);
-          }
-          delete EXCEPTIONS.infos[ptr];
-          ___cxa_free_exception(ptr);
-        }
-      },clearRef:function (ptr) {
-        if (!ptr) return;
-        var info = EXCEPTIONS.infos[ptr];
-        info.refcount = 0;
-      }};function ___cxa_begin_catch(ptr) {
-      var info = EXCEPTIONS.infos[ptr];
+      }
+      return adjusted;
+    }function ___cxa_begin_catch(ptr) {
+      var info = ___exception_infos[ptr];
       if (info && !info.caught) {
         info.caught = true;
-        __ZSt18uncaught_exceptionv.uncaught_exception--;
+        __ZSt18uncaught_exceptionv.uncaught_exceptions--;
       }
       if (info) info.rethrown = false;
-      EXCEPTIONS.caught.push(ptr);
-      EXCEPTIONS.addRef(EXCEPTIONS.deAdjust(ptr));
+      ___exception_caught.push(ptr);
+      ___exception_addRef(___exception_deAdjust(ptr));
       return ptr;
     }
 
+  function ___cxa_pure_virtual() {
+      ABORT = true;
   
-  function ___cxa_free_exception(ptr) {
-      try {
-        return _free(ptr);
-      } catch(e) { // XXX FIXME
-        err('exception during cxa_free_exception: ' + e);
-      }
-    }function ___cxa_end_catch() {
-      // Clear state flag.
-      Module['setThrew'](0);
-      // Call destructor if one is registered then clear it.
-      var ptr = EXCEPTIONS.caught.pop();
-      if (ptr) {
-        EXCEPTIONS.decRef(EXCEPTIONS.deAdjust(ptr));
-        EXCEPTIONS.last = 0; // XXX in decRef?
-      }
-    }
-
-  function ___cxa_find_matching_catch_2() {
-          return ___cxa_find_matching_catch.apply(null, arguments);
-        }
-
-  function ___cxa_find_matching_catch_3() {
-          return ___cxa_find_matching_catch.apply(null, arguments);
-        }
-
-
-  function ___cxa_rethrow() {
-      var ptr = EXCEPTIONS.caught.pop();
-      ptr = EXCEPTIONS.deAdjust(ptr);
-      if (!EXCEPTIONS.infos[ptr].rethrown) {
-        // Only pop if the corresponding push was through rethrow_primary_exception
-        EXCEPTIONS.caught.push(ptr)
-        EXCEPTIONS.infos[ptr].rethrown = true;
-      }
-      EXCEPTIONS.last = ptr;
-      throw ptr;
+      throw 'Pure virtual function called!';
     }
 
   
-  
-  function ___resumeException(ptr) {
-      if (!EXCEPTIONS.last) { EXCEPTIONS.last = ptr; }
-      throw ptr;
-    }function ___cxa_find_matching_catch() {
-      var thrown = EXCEPTIONS.last;
-      if (!thrown) {
-        // just pass through the null ptr
-        return ((setTempRet0(0),0)|0);
-      }
-      var info = EXCEPTIONS.infos[thrown];
-      var throwntype = info.type;
-      if (!throwntype) {
-        // just pass through the thrown ptr
-        return ((setTempRet0(0),thrown)|0);
-      }
-      var typeArray = Array.prototype.slice.call(arguments);
-  
-      var pointer = Module['___cxa_is_pointer_type'](throwntype);
-      // can_catch receives a **, add indirection
-      if (!___cxa_find_matching_catch.buffer) ___cxa_find_matching_catch.buffer = _malloc(4);
-      HEAP32[((___cxa_find_matching_catch.buffer)>>2)]=thrown;
-      thrown = ___cxa_find_matching_catch.buffer;
-      // The different catch blocks are denoted by different types.
-      // Due to inheritance, those types may not precisely match the
-      // type of the thrown object. Find one which matches, and
-      // return the type of the catch block which should be called.
-      for (var i = 0; i < typeArray.length; i++) {
-        if (typeArray[i] && Module['___cxa_can_catch'](typeArray[i], throwntype, thrown)) {
-          thrown = HEAP32[((thrown)>>2)]; // undo indirection
-          info.adjusted = thrown;
-          return ((setTempRet0(typeArray[i]),thrown)|0);
-        }
-      }
-      // Shouldn't happen unless we have bogus data in typeArray
-      // or encounter a type for which emscripten doesn't have suitable
-      // typeinfo defined. Best-efforts match just in case.
-      thrown = HEAP32[((thrown)>>2)]; // undo indirection
-      return ((setTempRet0(throwntype),thrown)|0);
-    }function ___cxa_throw(ptr, type, destructor) {
-      EXCEPTIONS.infos[ptr] = {
+  var ___exception_last=0;function ___cxa_throw(ptr, type, destructor) {
+      ___exception_infos[ptr] = {
         ptr: ptr,
-        adjusted: ptr,
+        adjusted: [ptr],
         type: type,
         destructor: destructor,
         refcount: 0,
         caught: false,
         rethrown: false
       };
-      EXCEPTIONS.last = ptr;
+      ___exception_last = ptr;
       if (!("uncaught_exception" in __ZSt18uncaught_exceptionv)) {
-        __ZSt18uncaught_exceptionv.uncaught_exception = 1;
+        __ZSt18uncaught_exceptionv.uncaught_exceptions = 1;
       } else {
-        __ZSt18uncaught_exceptionv.uncaught_exception++;
+        __ZSt18uncaught_exceptionv.uncaught_exceptions++;
       }
-      throw ptr;
+      throw ptr + " - Exception catching is disabled, this exception cannot be caught. Compile with -s DISABLE_EXCEPTION_CATCHING=0 or DISABLE_EXCEPTION_CATCHING=2 to catch.";
     }
 
-  function ___cxa_uncaught_exception() {
-      return !!__ZSt18uncaught_exceptionv.uncaught_exception;
+  function ___cxa_uncaught_exceptions() {
+      return __ZSt18uncaught_exceptionv.uncaught_exceptions;
     }
 
   function ___gxx_personality_v0() {
@@ -2070,27 +1973,21 @@ function copyTempDouble(ptr) {
   function ___lock() {}
 
   
-  var ERRNO_CODES={EPERM:1,ENOENT:2,ESRCH:3,EINTR:4,EIO:5,ENXIO:6,E2BIG:7,ENOEXEC:8,EBADF:9,ECHILD:10,EAGAIN:11,EWOULDBLOCK:11,ENOMEM:12,EACCES:13,EFAULT:14,ENOTBLK:15,EBUSY:16,EEXIST:17,EXDEV:18,ENODEV:19,ENOTDIR:20,EISDIR:21,EINVAL:22,ENFILE:23,EMFILE:24,ENOTTY:25,ETXTBSY:26,EFBIG:27,ENOSPC:28,ESPIPE:29,EROFS:30,EMLINK:31,EPIPE:32,EDOM:33,ERANGE:34,ENOMSG:42,EIDRM:43,ECHRNG:44,EL2NSYNC:45,EL3HLT:46,EL3RST:47,ELNRNG:48,EUNATCH:49,ENOCSI:50,EL2HLT:51,EDEADLK:35,ENOLCK:37,EBADE:52,EBADR:53,EXFULL:54,ENOANO:55,EBADRQC:56,EBADSLT:57,EDEADLOCK:35,EBFONT:59,ENOSTR:60,ENODATA:61,ETIME:62,ENOSR:63,ENONET:64,ENOPKG:65,EREMOTE:66,ENOLINK:67,EADV:68,ESRMNT:69,ECOMM:70,EPROTO:71,EMULTIHOP:72,EDOTDOT:73,EBADMSG:74,ENOTUNIQ:76,EBADFD:77,EREMCHG:78,ELIBACC:79,ELIBBAD:80,ELIBSCN:81,ELIBMAX:82,ELIBEXEC:83,ENOSYS:38,ENOTEMPTY:39,ENAMETOOLONG:36,ELOOP:40,EOPNOTSUPP:95,EPFNOSUPPORT:96,ECONNRESET:104,ENOBUFS:105,EAFNOSUPPORT:97,EPROTOTYPE:91,ENOTSOCK:88,ENOPROTOOPT:92,ESHUTDOWN:108,ECONNREFUSED:111,EADDRINUSE:98,ECONNABORTED:103,ENETUNREACH:101,ENETDOWN:100,ETIMEDOUT:110,EHOSTDOWN:112,EHOSTUNREACH:113,EINPROGRESS:115,EALREADY:114,EDESTADDRREQ:89,EMSGSIZE:90,EPROTONOSUPPORT:93,ESOCKTNOSUPPORT:94,EADDRNOTAVAIL:99,ENETRESET:102,EISCONN:106,ENOTCONN:107,ETOOMANYREFS:109,EUSERS:87,EDQUOT:122,ESTALE:116,ENOTSUP:95,ENOMEDIUM:123,EILSEQ:84,EOVERFLOW:75,ECANCELED:125,ENOTRECOVERABLE:131,EOWNERDEAD:130,ESTRPIPE:86};
-  
   function ___setErrNo(value) {
       if (Module['___errno_location']) HEAP32[((Module['___errno_location']())>>2)]=value;
       else err('failed to set errno from JS');
       return value;
     }function ___map_file(pathname, size) {
-      ___setErrNo(ERRNO_CODES.EPERM);
+      ___setErrNo(1);
       return -1;
     }
 
-
   
   
-  
-  var ERRNO_MESSAGES={0:"Success",1:"Not super-user",2:"No such file or directory",3:"No such process",4:"Interrupted system call",5:"I/O error",6:"No such device or address",7:"Arg list too long",8:"Exec format error",9:"Bad file number",10:"No children",11:"No more processes",12:"Not enough core",13:"Permission denied",14:"Bad address",15:"Block device required",16:"Mount device busy",17:"File exists",18:"Cross-device link",19:"No such device",20:"Not a directory",21:"Is a directory",22:"Invalid argument",23:"Too many open files in system",24:"Too many open files",25:"Not a typewriter",26:"Text file busy",27:"File too large",28:"No space left on device",29:"Illegal seek",30:"Read only file system",31:"Too many links",32:"Broken pipe",33:"Math arg out of domain of func",34:"Math result not representable",35:"File locking deadlock error",36:"File or path name too long",37:"No record locks available",38:"Function not implemented",39:"Directory not empty",40:"Too many symbolic links",42:"No message of desired type",43:"Identifier removed",44:"Channel number out of range",45:"Level 2 not synchronized",46:"Level 3 halted",47:"Level 3 reset",48:"Link number out of range",49:"Protocol driver not attached",50:"No CSI structure available",51:"Level 2 halted",52:"Invalid exchange",53:"Invalid request descriptor",54:"Exchange full",55:"No anode",56:"Invalid request code",57:"Invalid slot",59:"Bad font file fmt",60:"Device not a stream",61:"No data (for no delay io)",62:"Timer expired",63:"Out of streams resources",64:"Machine is not on the network",65:"Package not installed",66:"The object is remote",67:"The link has been severed",68:"Advertise error",69:"Srmount error",70:"Communication error on send",71:"Protocol error",72:"Multihop attempted",73:"Cross mount point (not really error)",74:"Trying to read unreadable message",75:"Value too large for defined data type",76:"Given log. name not unique",77:"f.d. invalid for this operation",78:"Remote address changed",79:"Can   access a needed shared lib",80:"Accessing a corrupted shared lib",81:".lib section in a.out corrupted",82:"Attempting to link in too many libs",83:"Attempting to exec a shared library",84:"Illegal byte sequence",86:"Streams pipe error",87:"Too many users",88:"Socket operation on non-socket",89:"Destination address required",90:"Message too long",91:"Protocol wrong type for socket",92:"Protocol not available",93:"Unknown protocol",94:"Socket type not supported",95:"Not supported",96:"Protocol family not supported",97:"Address family not supported by protocol family",98:"Address already in use",99:"Address not available",100:"Network interface is not configured",101:"Network is unreachable",102:"Connection reset by network",103:"Connection aborted",104:"Connection reset by peer",105:"No buffer space available",106:"Socket is already connected",107:"Socket is not connected",108:"Can't send after socket shutdown",109:"Too many references",110:"Connection timed out",111:"Connection refused",112:"Host is down",113:"Host is unreachable",114:"Socket already connected",115:"Connection already in progress",116:"Stale file handle",122:"Quota exceeded",123:"No medium (in tape drive)",125:"Operation canceled",130:"Previous owner died",131:"State not recoverable"};
-  
-  var PATH={splitPath:function (filename) {
+  var PATH={splitPath:function(filename) {
         var splitPathRe = /^(\/?|)([\s\S]*?)((?:\.{1,2}|[^\/]+?|)(\.[^.\/]*|))(?:[\/]*)$/;
         return splitPathRe.exec(filename).slice(1);
-      },normalizeArray:function (parts, allowAboveRoot) {
+      },normalizeArray:function(parts, allowAboveRoot) {
         // if the path tries to go above the root, `up` ends up > 0
         var up = 0;
         for (var i = parts.length - 1; i >= 0; i--) {
@@ -2112,7 +2009,7 @@ function copyTempDouble(ptr) {
           }
         }
         return parts;
-      },normalize:function (path) {
+      },normalize:function(path) {
         var isAbsolute = path.charAt(0) === '/',
             trailingSlash = path.substr(-1) === '/';
         // Normalize the path
@@ -2126,7 +2023,7 @@ function copyTempDouble(ptr) {
           path += '/';
         }
         return (isAbsolute ? '/' : '') + path;
-      },dirname:function (path) {
+      },dirname:function(path) {
         var result = PATH.splitPath(path),
             root = result[0],
             dir = result[1];
@@ -2139,20 +2036,23 @@ function copyTempDouble(ptr) {
           dir = dir.substr(0, dir.length - 1);
         }
         return root + dir;
-      },basename:function (path) {
+      },basename:function(path) {
         // EMSCRIPTEN return '/'' for '/', not an empty string
         if (path === '/') return '/';
         var lastSlash = path.lastIndexOf('/');
         if (lastSlash === -1) return path;
         return path.substr(lastSlash+1);
-      },extname:function (path) {
+      },extname:function(path) {
         return PATH.splitPath(path)[3];
-      },join:function () {
+      },join:function() {
         var paths = Array.prototype.slice.call(arguments, 0);
         return PATH.normalize(paths.join('/'));
-      },join2:function (l, r) {
+      },join2:function(l, r) {
         return PATH.normalize(l + '/' + r);
-      },resolve:function () {
+      }};
+  
+  
+  var PATH_FS={resolve:function() {
         var resolvedPath = '',
           resolvedAbsolute = false;
         for (var i = arguments.length - 1; i >= -1 && !resolvedAbsolute; i--) {
@@ -2172,9 +2072,9 @@ function copyTempDouble(ptr) {
           return !!p;
         }), !resolvedAbsolute).join('/');
         return ((resolvedAbsolute ? '/' : '') + resolvedPath) || '.';
-      },relative:function (from, to) {
-        from = PATH.resolve(from).substr(1);
-        to = PATH.resolve(to).substr(1);
+      },relative:function(from, to) {
+        from = PATH_FS.resolve(from).substr(1);
+        to = PATH_FS.resolve(to).substr(1);
         function trim(arr) {
           var start = 0;
           for (; start < arr.length; start++) {
@@ -2206,7 +2106,7 @@ function copyTempDouble(ptr) {
       }};
   
   var TTY={ttys:[],init:function () {
-        // https://github.com/kripken/emscripten/pull/1555
+        // https://github.com/emscripten-core/emscripten/pull/1555
         // if (ENVIRONMENT_IS_NODE) {
         //   // currently, FS.init does not distinguish if process.stdin is a file or TTY
         //   // device, it always assumes it's a TTY device. because of this, we're forcing
@@ -2214,8 +2114,8 @@ function copyTempDouble(ptr) {
         //   // with text files until FS.init can be refactored.
         //   process['stdin']['setEncoding']('utf8');
         // }
-      },shutdown:function () {
-        // https://github.com/kripken/emscripten/pull/1555
+      },shutdown:function() {
+        // https://github.com/emscripten-core/emscripten/pull/1555
         // if (ENVIRONMENT_IS_NODE) {
         //   // inolen: any idea as to why node -e 'process.stdin.read()' wouldn't exit immediately (with process.stdin being a tty)?
         //   // isaacs: because now it's reading from the stream, you've expressed interest in it, so that read() kicks off a _read() which creates a ReadReq operation
@@ -2224,24 +2124,24 @@ function copyTempDouble(ptr) {
         //   // isaacs: do process.stdin.pause() and i'd think it'd probably close the pending call
         //   process['stdin']['pause']();
         // }
-      },register:function (dev, ops) {
+      },register:function(dev, ops) {
         TTY.ttys[dev] = { input: [], output: [], ops: ops };
         FS.registerDevice(dev, TTY.stream_ops);
-      },stream_ops:{open:function (stream) {
+      },stream_ops:{open:function(stream) {
           var tty = TTY.ttys[stream.node.rdev];
           if (!tty) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENODEV);
+            throw new FS.ErrnoError(19);
           }
           stream.tty = tty;
           stream.seekable = false;
-        },close:function (stream) {
+        },close:function(stream) {
           // flush any pending line data
           stream.tty.ops.flush(stream.tty);
-        },flush:function (stream) {
+        },flush:function(stream) {
           stream.tty.ops.flush(stream.tty);
-        },read:function (stream, buffer, offset, length, pos /* ignored */) {
+        },read:function(stream, buffer, offset, length, pos /* ignored */) {
           if (!stream.tty || !stream.tty.ops.get_char) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENXIO);
+            throw new FS.ErrnoError(6);
           }
           var bytesRead = 0;
           for (var i = 0; i < length; i++) {
@@ -2249,10 +2149,10 @@ function copyTempDouble(ptr) {
             try {
               result = stream.tty.ops.get_char(stream.tty);
             } catch (e) {
-              throw new FS.ErrnoError(ERRNO_CODES.EIO);
+              throw new FS.ErrnoError(5);
             }
             if (result === undefined && bytesRead === 0) {
-              throw new FS.ErrnoError(ERRNO_CODES.EAGAIN);
+              throw new FS.ErrnoError(11);
             }
             if (result === null || result === undefined) break;
             bytesRead++;
@@ -2262,28 +2162,28 @@ function copyTempDouble(ptr) {
             stream.node.timestamp = Date.now();
           }
           return bytesRead;
-        },write:function (stream, buffer, offset, length, pos) {
+        },write:function(stream, buffer, offset, length, pos) {
           if (!stream.tty || !stream.tty.ops.put_char) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENXIO);
+            throw new FS.ErrnoError(6);
           }
-          for (var i = 0; i < length; i++) {
-            try {
+          try {
+            for (var i = 0; i < length; i++) {
               stream.tty.ops.put_char(stream.tty, buffer[offset+i]);
-            } catch (e) {
-              throw new FS.ErrnoError(ERRNO_CODES.EIO);
             }
+          } catch (e) {
+            throw new FS.ErrnoError(5);
           }
           if (length) {
             stream.node.timestamp = Date.now();
           }
           return i;
-        }},default_tty_ops:{get_char:function (tty) {
+        }},default_tty_ops:{get_char:function(tty) {
           if (!tty.input.length) {
             var result = null;
             if (ENVIRONMENT_IS_NODE) {
               // we will read data by chunks of BUFSIZE
               var BUFSIZE = 256;
-              var buf = new Buffer(BUFSIZE);
+              var buf = Buffer.alloc ? Buffer.alloc(BUFSIZE) : new Buffer(BUFSIZE);
               var bytesRead = 0;
   
               var isPosixPlatform = (process.platform != 'win32'); // Node doesn't offer a direct check, so test by exclusion
@@ -2313,8 +2213,8 @@ function copyTempDouble(ptr) {
               } else {
                 result = null;
               }
-  
-            } else if (typeof window != 'undefined' &&
+            } else
+            if (typeof window != 'undefined' &&
               typeof window.prompt == 'function') {
               // Browser.
               result = window.prompt('Input: ');  // returns null on cancel
@@ -2334,38 +2234,38 @@ function copyTempDouble(ptr) {
             tty.input = intArrayFromString(result, true);
           }
           return tty.input.shift();
-        },put_char:function (tty, val) {
+        },put_char:function(tty, val) {
           if (val === null || val === 10) {
             out(UTF8ArrayToString(tty.output, 0));
             tty.output = [];
           } else {
             if (val != 0) tty.output.push(val); // val == 0 would cut text output off in the middle.
           }
-        },flush:function (tty) {
+        },flush:function(tty) {
           if (tty.output && tty.output.length > 0) {
             out(UTF8ArrayToString(tty.output, 0));
             tty.output = [];
           }
-        }},default_tty1_ops:{put_char:function (tty, val) {
+        }},default_tty1_ops:{put_char:function(tty, val) {
           if (val === null || val === 10) {
             err(UTF8ArrayToString(tty.output, 0));
             tty.output = [];
           } else {
             if (val != 0) tty.output.push(val);
           }
-        },flush:function (tty) {
+        },flush:function(tty) {
           if (tty.output && tty.output.length > 0) {
             err(UTF8ArrayToString(tty.output, 0));
             tty.output = [];
           }
         }}};
   
-  var MEMFS={ops_table:null,mount:function (mount) {
+  var MEMFS={ops_table:null,mount:function(mount) {
         return MEMFS.createNode(null, '/', 16384 | 511 /* 0777 */, 0);
-      },createNode:function (parent, name, mode, dev) {
+      },createNode:function(parent, name, mode, dev) {
         if (FS.isBlkdev(mode) || FS.isFIFO(mode)) {
           // no supported
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         if (!MEMFS.ops_table) {
           MEMFS.ops_table = {
@@ -2442,44 +2342,31 @@ function copyTempDouble(ptr) {
           parent.contents[name] = node;
         }
         return node;
-      },getFileDataAsRegularArray:function (node) {
+      },getFileDataAsRegularArray:function(node) {
         if (node.contents && node.contents.subarray) {
           var arr = [];
           for (var i = 0; i < node.usedBytes; ++i) arr.push(node.contents[i]);
           return arr; // Returns a copy of the original data.
         }
         return node.contents; // No-op, the file contents are already in a JS array. Return as-is.
-      },getFileDataAsTypedArray:function (node) {
+      },getFileDataAsTypedArray:function(node) {
         if (!node.contents) return new Uint8Array;
         if (node.contents.subarray) return node.contents.subarray(0, node.usedBytes); // Make sure to not return excess unused bytes.
         return new Uint8Array(node.contents);
-      },expandFileStorage:function (node, newCapacity) {
-        // If we are asked to expand the size of a file that already exists, revert to using a standard JS array to store the file
-        // instead of a typed array. This makes resizing the array more flexible because we can just .push() elements at the back to
-        // increase the size.
-        if (node.contents && node.contents.subarray && newCapacity > node.contents.length) {
-          node.contents = MEMFS.getFileDataAsRegularArray(node);
-          node.usedBytes = node.contents.length; // We might be writing to a lazy-loaded file which had overridden this property, so force-reset it.
-        }
-  
-        if (!node.contents || node.contents.subarray) { // Keep using a typed array if creating a new storage, or if old one was a typed array as well.
-          var prevCapacity = node.contents ? node.contents.length : 0;
-          if (prevCapacity >= newCapacity) return; // No need to expand, the storage was already large enough.
-          // Don't expand strictly to the given requested limit if it's only a very small increase, but instead geometrically grow capacity.
-          // For small filesizes (<1MB), perform size*2 geometric increase, but for large sizes, do a much more conservative size*1.125 increase to
-          // avoid overshooting the allocation cap by a very large margin.
-          var CAPACITY_DOUBLING_MAX = 1024 * 1024;
-          newCapacity = Math.max(newCapacity, (prevCapacity * (prevCapacity < CAPACITY_DOUBLING_MAX ? 2.0 : 1.125)) | 0);
-          if (prevCapacity != 0) newCapacity = Math.max(newCapacity, 256); // At minimum allocate 256b for each file when expanding.
-          var oldContents = node.contents;
-          node.contents = new Uint8Array(newCapacity); // Allocate new storage.
-          if (node.usedBytes > 0) node.contents.set(oldContents.subarray(0, node.usedBytes), 0); // Copy old data over to the new storage.
-          return;
-        }
-        // Not using a typed array to back the file storage. Use a standard JS array instead.
-        if (!node.contents && newCapacity > 0) node.contents = [];
-        while (node.contents.length < newCapacity) node.contents.push(0);
-      },resizeFileStorage:function (node, newSize) {
+      },expandFileStorage:function(node, newCapacity) {
+        var prevCapacity = node.contents ? node.contents.length : 0;
+        if (prevCapacity >= newCapacity) return; // No need to expand, the storage was already large enough.
+        // Don't expand strictly to the given requested limit if it's only a very small increase, but instead geometrically grow capacity.
+        // For small filesizes (<1MB), perform size*2 geometric increase, but for large sizes, do a much more conservative size*1.125 increase to
+        // avoid overshooting the allocation cap by a very large margin.
+        var CAPACITY_DOUBLING_MAX = 1024 * 1024;
+        newCapacity = Math.max(newCapacity, (prevCapacity * (prevCapacity < CAPACITY_DOUBLING_MAX ? 2.0 : 1.125)) | 0);
+        if (prevCapacity != 0) newCapacity = Math.max(newCapacity, 256); // At minimum allocate 256b for each file when expanding.
+        var oldContents = node.contents;
+        node.contents = new Uint8Array(newCapacity); // Allocate new storage.
+        if (node.usedBytes > 0) node.contents.set(oldContents.subarray(0, node.usedBytes), 0); // Copy old data over to the new storage.
+        return;
+      },resizeFileStorage:function(node, newSize) {
         if (node.usedBytes == newSize) return;
         if (newSize == 0) {
           node.contents = null; // Fully decommit when requesting a resize to zero.
@@ -2500,7 +2387,7 @@ function copyTempDouble(ptr) {
         if (node.contents.length > newSize) node.contents.length = newSize;
         else while (node.contents.length < newSize) node.contents.push(0);
         node.usedBytes = newSize;
-      },node_ops:{getattr:function (node) {
+      },node_ops:{getattr:function(node) {
           var attr = {};
           // device numbers reuse inode numbers.
           attr.dev = FS.isChrdev(node.mode) ? node.id : 1;
@@ -2527,7 +2414,7 @@ function copyTempDouble(ptr) {
           attr.blksize = 4096;
           attr.blocks = Math.ceil(attr.size / attr.blksize);
           return attr;
-        },setattr:function (node, attr) {
+        },setattr:function(node, attr) {
           if (attr.mode !== undefined) {
             node.mode = attr.mode;
           }
@@ -2537,11 +2424,11 @@ function copyTempDouble(ptr) {
           if (attr.size !== undefined) {
             MEMFS.resizeFileStorage(node, attr.size);
           }
-        },lookup:function (parent, name) {
-          throw FS.genericErrors[ERRNO_CODES.ENOENT];
-        },mknod:function (parent, name, mode, dev) {
+        },lookup:function(parent, name) {
+          throw FS.genericErrors[2];
+        },mknod:function(parent, name, mode, dev) {
           return MEMFS.createNode(parent, name, mode, dev);
-        },rename:function (old_node, new_dir, new_name) {
+        },rename:function(old_node, new_dir, new_name) {
           // if we're overwriting a directory at new_name, make sure it's empty.
           if (FS.isDir(old_node.mode)) {
             var new_node;
@@ -2551,7 +2438,7 @@ function copyTempDouble(ptr) {
             }
             if (new_node) {
               for (var i in new_node.contents) {
-                throw new FS.ErrnoError(ERRNO_CODES.ENOTEMPTY);
+                throw new FS.ErrnoError(39);
               }
             }
           }
@@ -2560,16 +2447,16 @@ function copyTempDouble(ptr) {
           old_node.name = new_name;
           new_dir.contents[new_name] = old_node;
           old_node.parent = new_dir;
-        },unlink:function (parent, name) {
+        },unlink:function(parent, name) {
           delete parent.contents[name];
-        },rmdir:function (parent, name) {
+        },rmdir:function(parent, name) {
           var node = FS.lookupNode(parent, name);
           for (var i in node.contents) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENOTEMPTY);
+            throw new FS.ErrnoError(39);
           }
           delete parent.contents[name];
-        },readdir:function (node) {
-          var entries = ['.', '..']
+        },readdir:function(node) {
+          var entries = ['.', '..'];
           for (var key in node.contents) {
             if (!node.contents.hasOwnProperty(key)) {
               continue;
@@ -2577,16 +2464,16 @@ function copyTempDouble(ptr) {
             entries.push(key);
           }
           return entries;
-        },symlink:function (parent, newname, oldpath) {
+        },symlink:function(parent, newname, oldpath) {
           var node = MEMFS.createNode(parent, newname, 511 /* 0777 */ | 40960, 0);
           node.link = oldpath;
           return node;
-        },readlink:function (node) {
+        },readlink:function(node) {
           if (!FS.isLink(node.mode)) {
-            throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+            throw new FS.ErrnoError(22);
           }
           return node.link;
-        }},stream_ops:{read:function (stream, buffer, offset, length, position) {
+        }},stream_ops:{read:function(stream, buffer, offset, length, position) {
           var contents = stream.node.contents;
           if (position >= stream.node.usedBytes) return 0;
           var size = Math.min(stream.node.usedBytes - position, length);
@@ -2597,7 +2484,19 @@ function copyTempDouble(ptr) {
             for (var i = 0; i < size; i++) buffer[offset + i] = contents[position + i];
           }
           return size;
-        },write:function (stream, buffer, offset, length, position, canOwn) {
+        },write:function(stream, buffer, offset, length, position, canOwn) {
+          // If memory can grow, we don't want to hold on to references of
+          // the memory Buffer, as they may get invalidated. That means
+          // we need to do a copy here.
+          // FIXME: this is inefficient as the file packager may have
+          //        copied the data into memory already - we may want to
+          //        integrate more there and let the file packager loading
+          //        code be able to query if memory growth is on or off.
+          if (canOwn) {
+            warnOnce('file packager has copied file data into memory, but in memory growth we are forced to copy it again (see --no-heap-copy)');
+          }
+          canOwn = false;
+  
           if (!length) return 0;
           var node = stream.node;
           node.timestamp = Date.now();
@@ -2628,7 +2527,7 @@ function copyTempDouble(ptr) {
           }
           node.usedBytes = Math.max(node.usedBytes, position+length);
           return length;
-        },llseek:function (stream, offset, whence) {
+        },llseek:function(stream, offset, whence) {
           var position = offset;
           if (whence === 1) {  // SEEK_CUR.
             position += stream.position;
@@ -2638,15 +2537,15 @@ function copyTempDouble(ptr) {
             }
           }
           if (position < 0) {
-            throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+            throw new FS.ErrnoError(22);
           }
           return position;
-        },allocate:function (stream, offset, length) {
+        },allocate:function(stream, offset, length) {
           MEMFS.expandFileStorage(stream.node, offset + length);
           stream.node.usedBytes = Math.max(stream.node.usedBytes, offset + length);
-        },mmap:function (stream, buffer, offset, length, position, prot, flags) {
+        },mmap:function(stream, buffer, offset, length, position, prot, flags) {
           if (!FS.isFile(stream.node.mode)) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENODEV);
+            throw new FS.ErrnoError(19);
           }
           var ptr;
           var allocated;
@@ -2668,16 +2567,19 @@ function copyTempDouble(ptr) {
               }
             }
             allocated = true;
+            // malloc() can lead to growing the heap. If targeting the heap, we need to
+            // re-acquire the heap buffer object in case growth had occurred.
+            var fromHeap = (buffer.buffer == HEAP8.buffer);
             ptr = _malloc(length);
             if (!ptr) {
-              throw new FS.ErrnoError(ERRNO_CODES.ENOMEM);
+              throw new FS.ErrnoError(12);
             }
-            buffer.set(contents, ptr);
+            (fromHeap ? HEAP8 : buffer).set(contents, ptr);
           }
           return { ptr: ptr, allocated: allocated };
-        },msync:function (stream, buffer, offset, length, mmapFlags) {
+        },msync:function(stream, buffer, offset, length, mmapFlags) {
           if (!FS.isFile(stream.node.mode)) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENODEV);
+            throw new FS.ErrnoError(19);
           }
           if (mmapFlags & 2) {
             // MAP_PRIVATE calls need not to be synced back to underlying fs
@@ -2689,16 +2591,16 @@ function copyTempDouble(ptr) {
           return 0;
         }}};
   
-  var IDBFS={dbs:{},indexedDB:function () {
+  var IDBFS={dbs:{},indexedDB:function() {
         if (typeof indexedDB !== 'undefined') return indexedDB;
         var ret = null;
         if (typeof window === 'object') ret = window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
         assert(ret, 'IDBFS used, but indexedDB not supported');
         return ret;
-      },DB_VERSION:21,DB_STORE_NAME:"FILE_DATA",mount:function (mount) {
+      },DB_VERSION:21,DB_STORE_NAME:"FILE_DATA",mount:function(mount) {
         // reuse all of the core MEMFS functionality
         return MEMFS.mount.apply(null, arguments);
-      },syncfs:function (mount, populate, callback) {
+      },syncfs:function(mount, populate, callback) {
         IDBFS.getLocalSet(mount, function(err, local) {
           if (err) return callback(err);
   
@@ -2711,7 +2613,7 @@ function copyTempDouble(ptr) {
             IDBFS.reconcile(src, dst, callback);
           });
         });
-      },getDB:function (name, callback) {
+      },getDB:function(name, callback) {
         // check the cache first
         var db = IDBFS.dbs[name];
         if (db) {
@@ -2754,7 +2656,7 @@ function copyTempDouble(ptr) {
           callback(this.error);
           e.preventDefault();
         };
-      },getLocalSet:function (mount, callback) {
+      },getLocalSet:function(mount, callback) {
         var entries = {};
   
         function isRealDir(p) {
@@ -2786,7 +2688,7 @@ function copyTempDouble(ptr) {
         }
   
         return callback(null, { type: 'local', entries: entries });
-      },getRemoteSet:function (mount, callback) {
+      },getRemoteSet:function(mount, callback) {
         var entries = {};
   
         IDBFS.getDB(mount.mountpoint, function(err, db) {
@@ -2817,7 +2719,7 @@ function copyTempDouble(ptr) {
             return callback(e);
           }
         });
-      },loadLocalEntry:function (path, callback) {
+      },loadLocalEntry:function(path, callback) {
         var stat, node;
   
         try {
@@ -2838,7 +2740,7 @@ function copyTempDouble(ptr) {
         } else {
           return callback(new Error('node type not supported'));
         }
-      },storeLocalEntry:function (path, entry, callback) {
+      },storeLocalEntry:function(path, entry, callback) {
         try {
           if (FS.isDir(entry.mode)) {
             FS.mkdir(path, entry.mode);
@@ -2855,7 +2757,7 @@ function copyTempDouble(ptr) {
         }
   
         callback(null);
-      },removeLocalEntry:function (path, callback) {
+      },removeLocalEntry:function(path, callback) {
         try {
           var lookup = FS.lookupPath(path);
           var stat = FS.stat(path);
@@ -2870,28 +2772,28 @@ function copyTempDouble(ptr) {
         }
   
         callback(null);
-      },loadRemoteEntry:function (store, path, callback) {
+      },loadRemoteEntry:function(store, path, callback) {
         var req = store.get(path);
         req.onsuccess = function(event) { callback(null, event.target.result); };
         req.onerror = function(e) {
           callback(this.error);
           e.preventDefault();
         };
-      },storeRemoteEntry:function (store, path, entry, callback) {
+      },storeRemoteEntry:function(store, path, entry, callback) {
         var req = store.put(entry, path);
         req.onsuccess = function() { callback(null); };
         req.onerror = function(e) {
           callback(this.error);
           e.preventDefault();
         };
-      },removeRemoteEntry:function (store, path, callback) {
+      },removeRemoteEntry:function(store, path, callback) {
         var req = store.delete(path);
         req.onsuccess = function() { callback(null); };
         req.onerror = function(e) {
           callback(this.error);
           e.preventDefault();
         };
-      },reconcile:function (src, dst, callback) {
+      },reconcile:function(src, dst, callback) {
         var total = 0;
   
         var create = [];
@@ -2919,27 +2821,26 @@ function copyTempDouble(ptr) {
         }
   
         var errored = false;
-        var completed = 0;
         var db = src.type === 'remote' ? src.db : dst.db;
         var transaction = db.transaction([IDBFS.DB_STORE_NAME], 'readwrite');
         var store = transaction.objectStore(IDBFS.DB_STORE_NAME);
   
         function done(err) {
-          if (err) {
-            if (!done.errored) {
-              done.errored = true;
-              return callback(err);
-            }
-            return;
-          }
-          if (++completed >= total) {
-            return callback(null);
+          if (err && !errored) {
+            errored = true;
+            return callback(err);
           }
         };
   
         transaction.onerror = function(e) {
           done(this.error);
           e.preventDefault();
+        };
+  
+        transaction.oncomplete = function(e) {
+          if (!errored) {
+            callback(null);
+          }
         };
   
         // sort paths in ascending order so directory entries are created
@@ -2969,7 +2870,7 @@ function copyTempDouble(ptr) {
         });
       }};
   
-  var NODEFS={isWindows:false,staticInit:function () {
+  var NODEFS={isWindows:false,staticInit:function() {
         NODEFS.isWindows = !!process.platform.match(/^win/);
         var flags = process["binding"]("constants");
         // Node.js 4 compatibility: it has no namespaces for constants
@@ -2992,11 +2893,11 @@ function copyTempDouble(ptr) {
         // Buffer.alloc has been added with Buffer.from together, so check it instead
         return Buffer.alloc ? Buffer.from(arrayBuffer) : new Buffer(arrayBuffer);
       },mount:function (mount) {
-        assert(ENVIRONMENT_IS_NODE);
+        assert(ENVIRONMENT_HAS_NODE);
         return NODEFS.createNode(null, '/', NODEFS.getMode(mount.opts.root), 0);
       },createNode:function (parent, name, mode, dev) {
         if (!FS.isDir(mode) && !FS.isFile(mode) && !FS.isLink(mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         var node = FS.createNode(parent, name, mode);
         node.node_ops = NODEFS.node_ops;
@@ -3013,7 +2914,7 @@ function copyTempDouble(ptr) {
           }
         } catch (e) {
           if (!e.code) throw e;
-          throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+          throw new FS.ErrnoError(-e.errno); // syscall errnos are negated, node's are not
         }
         return stat.mode;
       },realPath:function (node) {
@@ -3025,7 +2926,7 @@ function copyTempDouble(ptr) {
         parts.push(node.mount.opts.root);
         parts.reverse();
         return PATH.join.apply(null, parts);
-      },flagsForNode:function (flags) {
+      },flagsForNode:function(flags) {
         flags &= ~0x200000 /*O_PATH*/; // Ignore this flag from musl, otherwise node.js fails to open the file.
         flags &= ~0x800 /*O_NONBLOCK*/; // Ignore this flag from musl, otherwise node.js fails to open the file.
         flags &= ~0x8000 /*O_LARGEFILE*/; // Ignore this flag from musl, otherwise node.js fails to open the file.
@@ -3041,16 +2942,16 @@ function copyTempDouble(ptr) {
         if (!flags) {
           return newFlags;
         } else {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
-      },node_ops:{getattr:function (node) {
+      },node_ops:{getattr:function(node) {
           var path = NODEFS.realPath(node);
           var stat;
           try {
             stat = fs.lstatSync(path);
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
           // node.js v0.10.20 doesn't report blksize and blocks on Windows. Fake them with default blksize of 4096.
           // See http://support.microsoft.com/kb/140365
@@ -3075,7 +2976,7 @@ function copyTempDouble(ptr) {
             blksize: stat.blksize,
             blocks: stat.blocks
           };
-        },setattr:function (node, attr) {
+        },setattr:function(node, attr) {
           var path = NODEFS.realPath(node);
           try {
             if (attr.mode !== undefined) {
@@ -3092,7 +2993,7 @@ function copyTempDouble(ptr) {
             }
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
         },lookup:function (parent, name) {
           var path = PATH.join2(NODEFS.realPath(parent), name);
@@ -3110,7 +3011,7 @@ function copyTempDouble(ptr) {
             }
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
           return node;
         },rename:function (oldNode, newDir, newName) {
@@ -3120,41 +3021,41 @@ function copyTempDouble(ptr) {
             fs.renameSync(oldPath, newPath);
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
-        },unlink:function (parent, name) {
+        },unlink:function(parent, name) {
           var path = PATH.join2(NODEFS.realPath(parent), name);
           try {
             fs.unlinkSync(path);
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
-        },rmdir:function (parent, name) {
+        },rmdir:function(parent, name) {
           var path = PATH.join2(NODEFS.realPath(parent), name);
           try {
             fs.rmdirSync(path);
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
-        },readdir:function (node) {
+        },readdir:function(node) {
           var path = NODEFS.realPath(node);
           try {
             return fs.readdirSync(path);
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
-        },symlink:function (parent, newName, oldPath) {
+        },symlink:function(parent, newName, oldPath) {
           var newPath = PATH.join2(NODEFS.realPath(parent), newName);
           try {
             fs.symlinkSync(oldPath, newPath);
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
-        },readlink:function (node) {
+        },readlink:function(node) {
           var path = NODEFS.realPath(node);
           try {
             path = fs.readlinkSync(path);
@@ -3162,7 +3063,7 @@ function copyTempDouble(ptr) {
             return path;
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
         }},stream_ops:{open:function (stream) {
           var path = NODEFS.realPath(stream.node);
@@ -3172,7 +3073,7 @@ function copyTempDouble(ptr) {
             }
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
         },close:function (stream) {
           try {
@@ -3181,7 +3082,7 @@ function copyTempDouble(ptr) {
             }
           } catch (e) {
             if (!e.code) throw e;
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
         },read:function (stream, buffer, offset, length, position) {
           // Node.js < 6 compatibility: node errors on 0 length reads
@@ -3189,13 +3090,13 @@ function copyTempDouble(ptr) {
           try {
             return fs.readSync(stream.nfd, NODEFS.bufferFrom(buffer.buffer), offset, length, position);
           } catch (e) {
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
         },write:function (stream, buffer, offset, length, position) {
           try {
             return fs.writeSync(stream.nfd, NODEFS.bufferFrom(buffer.buffer), offset, length, position);
           } catch (e) {
-            throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+            throw new FS.ErrnoError(-e.errno);
           }
         },llseek:function (stream, offset, whence) {
           var position = offset;
@@ -3207,13 +3108,13 @@ function copyTempDouble(ptr) {
                 var stat = fs.fstatSync(stream.nfd);
                 position += stat.size;
               } catch (e) {
-                throw new FS.ErrnoError(ERRNO_CODES[e.code]);
+                throw new FS.ErrnoError(-e.errno);
               }
             }
           }
   
           if (position < 0) {
-            throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+            throw new FS.ErrnoError(22);
           }
   
           return position;
@@ -3280,7 +3181,7 @@ function copyTempDouble(ptr) {
           parent.contents[name] = node;
         }
         return node;
-      },node_ops:{getattr:function (node) {
+      },node_ops:{getattr:function(node) {
           return {
             dev: 1,
             ino: undefined,
@@ -3296,24 +3197,24 @@ function copyTempDouble(ptr) {
             blksize: 4096,
             blocks: Math.ceil(node.size / 4096),
           };
-        },setattr:function (node, attr) {
+        },setattr:function(node, attr) {
           if (attr.mode !== undefined) {
             node.mode = attr.mode;
           }
           if (attr.timestamp !== undefined) {
             node.timestamp = attr.timestamp;
           }
-        },lookup:function (parent, name) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+        },lookup:function(parent, name) {
+          throw new FS.ErrnoError(2);
         },mknod:function (parent, name, mode, dev) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         },rename:function (oldNode, newDir, newName) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
-        },unlink:function (parent, name) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
-        },rmdir:function (parent, name) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
-        },readdir:function (node) {
+          throw new FS.ErrnoError(1);
+        },unlink:function(parent, name) {
+          throw new FS.ErrnoError(1);
+        },rmdir:function(parent, name) {
+          throw new FS.ErrnoError(1);
+        },readdir:function(node) {
           var entries = ['.', '..'];
           for (var key in node.contents) {
             if (!node.contents.hasOwnProperty(key)) {
@@ -3322,10 +3223,10 @@ function copyTempDouble(ptr) {
             entries.push(key);
           }
           return entries;
-        },symlink:function (parent, newName, oldPath) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
-        },readlink:function (node) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+        },symlink:function(parent, newName, oldPath) {
+          throw new FS.ErrnoError(1);
+        },readlink:function(node) {
+          throw new FS.ErrnoError(1);
         }},stream_ops:{read:function (stream, buffer, offset, length, position) {
           if (position >= stream.node.size) return 0;
           var chunk = stream.node.contents.slice(position, position + length);
@@ -3333,7 +3234,7 @@ function copyTempDouble(ptr) {
           buffer.set(new Uint8Array(ab), offset);
           return chunk.size;
         },write:function (stream, buffer, offset, length, position) {
-          throw new FS.ErrnoError(ERRNO_CODES.EIO);
+          throw new FS.ErrnoError(5);
         },llseek:function (stream, offset, whence) {
           var position = offset;
           if (whence === 1) {  // SEEK_CUR.
@@ -3344,20 +3245,18 @@ function copyTempDouble(ptr) {
             }
           }
           if (position < 0) {
-            throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+            throw new FS.ErrnoError(22);
           }
           return position;
         }}};
   
-  var _stdin=STATICTOP; STATICTOP += 16;;
+  var ERRNO_MESSAGES={0:"Success",1:"Not super-user",2:"No such file or directory",3:"No such process",4:"Interrupted system call",5:"I/O error",6:"No such device or address",7:"Arg list too long",8:"Exec format error",9:"Bad file number",10:"No children",11:"No more processes",12:"Not enough core",13:"Permission denied",14:"Bad address",15:"Block device required",16:"Mount device busy",17:"File exists",18:"Cross-device link",19:"No such device",20:"Not a directory",21:"Is a directory",22:"Invalid argument",23:"Too many open files in system",24:"Too many open files",25:"Not a typewriter",26:"Text file busy",27:"File too large",28:"No space left on device",29:"Illegal seek",30:"Read only file system",31:"Too many links",32:"Broken pipe",33:"Math arg out of domain of func",34:"Math result not representable",35:"File locking deadlock error",36:"File or path name too long",37:"No record locks available",38:"Function not implemented",39:"Directory not empty",40:"Too many symbolic links",42:"No message of desired type",43:"Identifier removed",44:"Channel number out of range",45:"Level 2 not synchronized",46:"Level 3 halted",47:"Level 3 reset",48:"Link number out of range",49:"Protocol driver not attached",50:"No CSI structure available",51:"Level 2 halted",52:"Invalid exchange",53:"Invalid request descriptor",54:"Exchange full",55:"No anode",56:"Invalid request code",57:"Invalid slot",59:"Bad font file fmt",60:"Device not a stream",61:"No data (for no delay io)",62:"Timer expired",63:"Out of streams resources",64:"Machine is not on the network",65:"Package not installed",66:"The object is remote",67:"The link has been severed",68:"Advertise error",69:"Srmount error",70:"Communication error on send",71:"Protocol error",72:"Multihop attempted",73:"Cross mount point (not really error)",74:"Trying to read unreadable message",75:"Value too large for defined data type",76:"Given log. name not unique",77:"f.d. invalid for this operation",78:"Remote address changed",79:"Can   access a needed shared lib",80:"Accessing a corrupted shared lib",81:".lib section in a.out corrupted",82:"Attempting to link in too many libs",83:"Attempting to exec a shared library",84:"Illegal byte sequence",86:"Streams pipe error",87:"Too many users",88:"Socket operation on non-socket",89:"Destination address required",90:"Message too long",91:"Protocol wrong type for socket",92:"Protocol not available",93:"Unknown protocol",94:"Socket type not supported",95:"Not supported",96:"Protocol family not supported",97:"Address family not supported by protocol family",98:"Address already in use",99:"Address not available",100:"Network interface is not configured",101:"Network is unreachable",102:"Connection reset by network",103:"Connection aborted",104:"Connection reset by peer",105:"No buffer space available",106:"Socket is already connected",107:"Socket is not connected",108:"Can't send after socket shutdown",109:"Too many references",110:"Connection timed out",111:"Connection refused",112:"Host is down",113:"Host is unreachable",114:"Socket already connected",115:"Connection already in progress",116:"Stale file handle",122:"Quota exceeded",123:"No medium (in tape drive)",125:"Operation canceled",130:"Previous owner died",131:"State not recoverable"};
   
-  var _stdout=STATICTOP; STATICTOP += 16;;
-  
-  var _stderr=STATICTOP; STATICTOP += 16;;var FS={root:null,mounts:[],devices:{},streams:[],nextInode:1,nameTable:null,currentPath:"/",initialized:false,ignorePermissions:true,trackingDelegate:{},tracking:{openFlags:{READ:1,WRITE:2}},ErrnoError:null,genericErrors:{},filesystems:null,syncFSRequests:0,handleFSError:function (e) {
+  var ERRNO_CODES={EPERM:1,ENOENT:2,ESRCH:3,EINTR:4,EIO:5,ENXIO:6,E2BIG:7,ENOEXEC:8,EBADF:9,ECHILD:10,EAGAIN:11,EWOULDBLOCK:11,ENOMEM:12,EACCES:13,EFAULT:14,ENOTBLK:15,EBUSY:16,EEXIST:17,EXDEV:18,ENODEV:19,ENOTDIR:20,EISDIR:21,EINVAL:22,ENFILE:23,EMFILE:24,ENOTTY:25,ETXTBSY:26,EFBIG:27,ENOSPC:28,ESPIPE:29,EROFS:30,EMLINK:31,EPIPE:32,EDOM:33,ERANGE:34,ENOMSG:42,EIDRM:43,ECHRNG:44,EL2NSYNC:45,EL3HLT:46,EL3RST:47,ELNRNG:48,EUNATCH:49,ENOCSI:50,EL2HLT:51,EDEADLK:35,ENOLCK:37,EBADE:52,EBADR:53,EXFULL:54,ENOANO:55,EBADRQC:56,EBADSLT:57,EDEADLOCK:35,EBFONT:59,ENOSTR:60,ENODATA:61,ETIME:62,ENOSR:63,ENONET:64,ENOPKG:65,EREMOTE:66,ENOLINK:67,EADV:68,ESRMNT:69,ECOMM:70,EPROTO:71,EMULTIHOP:72,EDOTDOT:73,EBADMSG:74,ENOTUNIQ:76,EBADFD:77,EREMCHG:78,ELIBACC:79,ELIBBAD:80,ELIBSCN:81,ELIBMAX:82,ELIBEXEC:83,ENOSYS:38,ENOTEMPTY:39,ENAMETOOLONG:36,ELOOP:40,EOPNOTSUPP:95,EPFNOSUPPORT:96,ECONNRESET:104,ENOBUFS:105,EAFNOSUPPORT:97,EPROTOTYPE:91,ENOTSOCK:88,ENOPROTOOPT:92,ESHUTDOWN:108,ECONNREFUSED:111,EADDRINUSE:98,ECONNABORTED:103,ENETUNREACH:101,ENETDOWN:100,ETIMEDOUT:110,EHOSTDOWN:112,EHOSTUNREACH:113,EINPROGRESS:115,EALREADY:114,EDESTADDRREQ:89,EMSGSIZE:90,EPROTONOSUPPORT:93,ESOCKTNOSUPPORT:94,EADDRNOTAVAIL:99,ENETRESET:102,EISCONN:106,ENOTCONN:107,ETOOMANYREFS:109,EUSERS:87,EDQUOT:122,ESTALE:116,ENOTSUP:95,ENOMEDIUM:123,EILSEQ:84,EOVERFLOW:75,ECANCELED:125,ENOTRECOVERABLE:131,EOWNERDEAD:130,ESTRPIPE:86};var FS={root:null,mounts:[],devices:{},streams:[],nextInode:1,nameTable:null,currentPath:"/",initialized:false,ignorePermissions:true,trackingDelegate:{},tracking:{openFlags:{READ:1,WRITE:2}},ErrnoError:null,genericErrors:{},filesystems:null,syncFSRequests:0,handleFSError:function(e) {
         if (!(e instanceof FS.ErrnoError)) throw e + ' : ' + stackTrace();
         return ___setErrNo(e.errno);
-      },lookupPath:function (path, opts) {
-        path = PATH.resolve(FS.cwd(), path);
+      },lookupPath:function(path, opts) {
+        path = PATH_FS.resolve(FS.cwd(), path);
         opts = opts || {};
   
         if (!path) return { path: '', node: null };
@@ -3373,7 +3272,7 @@ function copyTempDouble(ptr) {
         }
   
         if (opts.recurse_count > 8) {  // max recursive lookup of 8
-          throw new FS.ErrnoError(ERRNO_CODES.ELOOP);
+          throw new FS.ErrnoError(40);
         }
   
         // split the path
@@ -3408,20 +3307,20 @@ function copyTempDouble(ptr) {
             var count = 0;
             while (FS.isLink(current.mode)) {
               var link = FS.readlink(current_path);
-              current_path = PATH.resolve(PATH.dirname(current_path), link);
+              current_path = PATH_FS.resolve(PATH.dirname(current_path), link);
   
               var lookup = FS.lookupPath(current_path, { recurse_count: opts.recurse_count });
               current = lookup.node;
   
               if (count++ > 40) {  // limit max consecutive symlinks to 40 (SYMLOOP_MAX).
-                throw new FS.ErrnoError(ERRNO_CODES.ELOOP);
+                throw new FS.ErrnoError(40);
               }
             }
           }
         }
   
         return { path: current_path, node: current };
-      },getPath:function (node) {
+      },getPath:function(node) {
         var path;
         while (true) {
           if (FS.isRoot(node)) {
@@ -3432,7 +3331,7 @@ function copyTempDouble(ptr) {
           path = path ? node.name + '/' + path : node.name;
           node = node.parent;
         }
-      },hashName:function (parentid, name) {
+      },hashName:function(parentid, name) {
         var hash = 0;
   
   
@@ -3440,11 +3339,11 @@ function copyTempDouble(ptr) {
           hash = ((hash << 5) - hash + name.charCodeAt(i)) | 0;
         }
         return ((parentid + hash) >>> 0) % FS.nameTable.length;
-      },hashAddNode:function (node) {
+      },hashAddNode:function(node) {
         var hash = FS.hashName(node.parent.id, node.name);
         node.name_next = FS.nameTable[hash];
         FS.nameTable[hash] = node;
-      },hashRemoveNode:function (node) {
+      },hashRemoveNode:function(node) {
         var hash = FS.hashName(node.parent.id, node.name);
         if (FS.nameTable[hash] === node) {
           FS.nameTable[hash] = node.name_next;
@@ -3458,7 +3357,7 @@ function copyTempDouble(ptr) {
             current = current.name_next;
           }
         }
-      },lookupNode:function (parent, name) {
+      },lookupNode:function(parent, name) {
         var err = FS.mayLookup(parent);
         if (err) {
           throw new FS.ErrnoError(err, parent);
@@ -3472,7 +3371,7 @@ function copyTempDouble(ptr) {
         }
         // if we failed to find it in the cache, call into the VFS
         return FS.lookup(parent, name);
-      },createNode:function (parent, name, mode, rdev) {
+      },createNode:function(parent, name, mode, rdev) {
         if (!FS.FSNode) {
           FS.FSNode = function(parent, name, mode, rdev) {
             if (!parent) {
@@ -3520,64 +3419,64 @@ function copyTempDouble(ptr) {
         FS.hashAddNode(node);
   
         return node;
-      },destroyNode:function (node) {
+      },destroyNode:function(node) {
         FS.hashRemoveNode(node);
-      },isRoot:function (node) {
+      },isRoot:function(node) {
         return node === node.parent;
-      },isMountpoint:function (node) {
+      },isMountpoint:function(node) {
         return !!node.mounted;
-      },isFile:function (mode) {
+      },isFile:function(mode) {
         return (mode & 61440) === 32768;
-      },isDir:function (mode) {
+      },isDir:function(mode) {
         return (mode & 61440) === 16384;
-      },isLink:function (mode) {
+      },isLink:function(mode) {
         return (mode & 61440) === 40960;
-      },isChrdev:function (mode) {
+      },isChrdev:function(mode) {
         return (mode & 61440) === 8192;
-      },isBlkdev:function (mode) {
+      },isBlkdev:function(mode) {
         return (mode & 61440) === 24576;
-      },isFIFO:function (mode) {
+      },isFIFO:function(mode) {
         return (mode & 61440) === 4096;
-      },isSocket:function (mode) {
+      },isSocket:function(mode) {
         return (mode & 49152) === 49152;
-      },flagModes:{"r":0,"rs":1052672,"r+":2,"w":577,"wx":705,"xw":705,"w+":578,"wx+":706,"xw+":706,"a":1089,"ax":1217,"xa":1217,"a+":1090,"ax+":1218,"xa+":1218},modeStringToFlags:function (str) {
+      },flagModes:{"r":0,"rs":1052672,"r+":2,"w":577,"wx":705,"xw":705,"w+":578,"wx+":706,"xw+":706,"a":1089,"ax":1217,"xa":1217,"a+":1090,"ax+":1218,"xa+":1218},modeStringToFlags:function(str) {
         var flags = FS.flagModes[str];
         if (typeof flags === 'undefined') {
           throw new Error('Unknown file open mode: ' + str);
         }
         return flags;
-      },flagsToPermissionString:function (flag) {
+      },flagsToPermissionString:function(flag) {
         var perms = ['r', 'w', 'rw'][flag & 3];
         if ((flag & 512)) {
           perms += 'w';
         }
         return perms;
-      },nodePermissions:function (node, perms) {
+      },nodePermissions:function(node, perms) {
         if (FS.ignorePermissions) {
           return 0;
         }
         // return 0 if any user, group or owner bits are set.
         if (perms.indexOf('r') !== -1 && !(node.mode & 292)) {
-          return ERRNO_CODES.EACCES;
+          return 13;
         } else if (perms.indexOf('w') !== -1 && !(node.mode & 146)) {
-          return ERRNO_CODES.EACCES;
+          return 13;
         } else if (perms.indexOf('x') !== -1 && !(node.mode & 73)) {
-          return ERRNO_CODES.EACCES;
+          return 13;
         }
         return 0;
-      },mayLookup:function (dir) {
+      },mayLookup:function(dir) {
         var err = FS.nodePermissions(dir, 'x');
         if (err) return err;
-        if (!dir.node_ops.lookup) return ERRNO_CODES.EACCES;
+        if (!dir.node_ops.lookup) return 13;
         return 0;
-      },mayCreate:function (dir, name) {
+      },mayCreate:function(dir, name) {
         try {
           var node = FS.lookupNode(dir, name);
-          return ERRNO_CODES.EEXIST;
+          return 17;
         } catch (e) {
         }
         return FS.nodePermissions(dir, 'wx');
-      },mayDelete:function (dir, name, isdir) {
+      },mayDelete:function(dir, name, isdir) {
         var node;
         try {
           node = FS.lookupNode(dir, name);
@@ -3590,31 +3489,31 @@ function copyTempDouble(ptr) {
         }
         if (isdir) {
           if (!FS.isDir(node.mode)) {
-            return ERRNO_CODES.ENOTDIR;
+            return 20;
           }
           if (FS.isRoot(node) || FS.getPath(node) === FS.cwd()) {
-            return ERRNO_CODES.EBUSY;
+            return 16;
           }
         } else {
           if (FS.isDir(node.mode)) {
-            return ERRNO_CODES.EISDIR;
+            return 21;
           }
         }
         return 0;
-      },mayOpen:function (node, flags) {
+      },mayOpen:function(node, flags) {
         if (!node) {
-          return ERRNO_CODES.ENOENT;
+          return 2;
         }
         if (FS.isLink(node.mode)) {
-          return ERRNO_CODES.ELOOP;
+          return 40;
         } else if (FS.isDir(node.mode)) {
           if (FS.flagsToPermissionString(flags) !== 'r' || // opening for write
               (flags & 512)) { // TODO: check for O_SEARCH? (== search for dir only)
-            return ERRNO_CODES.EISDIR;
+            return 21;
           }
         }
         return FS.nodePermissions(node, FS.flagsToPermissionString(flags));
-      },MAX_OPEN_FDS:4096,nextfd:function (fd_start, fd_end) {
+      },MAX_OPEN_FDS:4096,nextfd:function(fd_start, fd_end) {
         fd_start = fd_start || 0;
         fd_end = fd_end || FS.MAX_OPEN_FDS;
         for (var fd = fd_start; fd <= fd_end; fd++) {
@@ -3622,10 +3521,10 @@ function copyTempDouble(ptr) {
             return fd;
           }
         }
-        throw new FS.ErrnoError(ERRNO_CODES.EMFILE);
-      },getStream:function (fd) {
+        throw new FS.ErrnoError(24);
+      },getStream:function(fd) {
         return FS.streams[fd];
-      },createStream:function (stream, fd_start, fd_end) {
+      },createStream:function(stream, fd_start, fd_end) {
         if (!FS.FSStream) {
           FS.FSStream = function(){};
           FS.FSStream.prototype = {};
@@ -3656,9 +3555,9 @@ function copyTempDouble(ptr) {
         stream.fd = fd;
         FS.streams[fd] = stream;
         return stream;
-      },closeStream:function (fd) {
+      },closeStream:function(fd) {
         FS.streams[fd] = null;
-      },chrdev_stream_ops:{open:function (stream) {
+      },chrdev_stream_ops:{open:function(stream) {
           var device = FS.getDevice(stream.node.rdev);
           // override node's stream ops with the device's
           stream.stream_ops = device.stream_ops;
@@ -3666,19 +3565,19 @@ function copyTempDouble(ptr) {
           if (stream.stream_ops.open) {
             stream.stream_ops.open(stream);
           }
-        },llseek:function () {
-          throw new FS.ErrnoError(ERRNO_CODES.ESPIPE);
-        }},major:function (dev) {
+        },llseek:function() {
+          throw new FS.ErrnoError(29);
+        }},major:function(dev) {
         return ((dev) >> 8);
-      },minor:function (dev) {
+      },minor:function(dev) {
         return ((dev) & 0xff);
-      },makedev:function (ma, mi) {
+      },makedev:function(ma, mi) {
         return ((ma) << 8 | (mi));
-      },registerDevice:function (dev, ops) {
+      },registerDevice:function(dev, ops) {
         FS.devices[dev] = { stream_ops: ops };
-      },getDevice:function (dev) {
+      },getDevice:function(dev) {
         return FS.devices[dev];
-      },getMounts:function (mount) {
+      },getMounts:function(mount) {
         var mounts = [];
         var check = [mount];
   
@@ -3691,7 +3590,7 @@ function copyTempDouble(ptr) {
         }
   
         return mounts;
-      },syncfs:function (populate, callback) {
+      },syncfs:function(populate, callback) {
         if (typeof(populate) === 'function') {
           callback = populate;
           populate = false;
@@ -3732,13 +3631,13 @@ function copyTempDouble(ptr) {
           }
           mount.type.syncfs(mount, populate, done);
         });
-      },mount:function (type, opts, mountpoint) {
+      },mount:function(type, opts, mountpoint) {
         var root = mountpoint === '/';
         var pseudo = !mountpoint;
         var node;
   
         if (root && FS.root) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBUSY);
+          throw new FS.ErrnoError(16);
         } else if (!root && !pseudo) {
           var lookup = FS.lookupPath(mountpoint, { follow_mount: false });
   
@@ -3746,11 +3645,11 @@ function copyTempDouble(ptr) {
           node = lookup.node;
   
           if (FS.isMountpoint(node)) {
-            throw new FS.ErrnoError(ERRNO_CODES.EBUSY);
+            throw new FS.ErrnoError(16);
           }
   
           if (!FS.isDir(node.mode)) {
-            throw new FS.ErrnoError(ERRNO_CODES.ENOTDIR);
+            throw new FS.ErrnoError(20);
           }
         }
   
@@ -3783,7 +3682,7 @@ function copyTempDouble(ptr) {
         var lookup = FS.lookupPath(mountpoint, { follow_mount: false });
   
         if (!FS.isMountpoint(lookup.node)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
   
         // destroy the nodes for this mount, and all its child mounts
@@ -3812,34 +3711,34 @@ function copyTempDouble(ptr) {
         var idx = node.mount.mounts.indexOf(mount);
         assert(idx !== -1);
         node.mount.mounts.splice(idx, 1);
-      },lookup:function (parent, name) {
+      },lookup:function(parent, name) {
         return parent.node_ops.lookup(parent, name);
-      },mknod:function (path, mode, dev) {
+      },mknod:function(path, mode, dev) {
         var lookup = FS.lookupPath(path, { parent: true });
         var parent = lookup.node;
         var name = PATH.basename(path);
         if (!name || name === '.' || name === '..') {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         var err = FS.mayCreate(parent, name);
         if (err) {
           throw new FS.ErrnoError(err);
         }
         if (!parent.node_ops.mknod) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         return parent.node_ops.mknod(parent, name, mode, dev);
-      },create:function (path, mode) {
+      },create:function(path, mode) {
         mode = mode !== undefined ? mode : 438 /* 0666 */;
         mode &= 4095;
         mode |= 32768;
         return FS.mknod(path, mode, 0);
-      },mkdir:function (path, mode) {
+      },mkdir:function(path, mode) {
         mode = mode !== undefined ? mode : 511 /* 0777 */;
         mode &= 511 | 512;
         mode |= 16384;
         return FS.mknod(path, mode, 0);
-      },mkdirTree:function (path, mode) {
+      },mkdirTree:function(path, mode) {
         var dirs = path.split('/');
         var d = '';
         for (var i = 0; i < dirs.length; ++i) {
@@ -3848,24 +3747,24 @@ function copyTempDouble(ptr) {
           try {
             FS.mkdir(d, mode);
           } catch(e) {
-            if (e.errno != ERRNO_CODES.EEXIST) throw e;
+            if (e.errno != 17) throw e;
           }
         }
-      },mkdev:function (path, mode, dev) {
+      },mkdev:function(path, mode, dev) {
         if (typeof(dev) === 'undefined') {
           dev = mode;
           mode = 438 /* 0666 */;
         }
         mode |= 8192;
         return FS.mknod(path, mode, dev);
-      },symlink:function (oldpath, newpath) {
-        if (!PATH.resolve(oldpath)) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+      },symlink:function(oldpath, newpath) {
+        if (!PATH_FS.resolve(oldpath)) {
+          throw new FS.ErrnoError(2);
         }
         var lookup = FS.lookupPath(newpath, { parent: true });
         var parent = lookup.node;
         if (!parent) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+          throw new FS.ErrnoError(2);
         }
         var newname = PATH.basename(newpath);
         var err = FS.mayCreate(parent, newname);
@@ -3873,10 +3772,10 @@ function copyTempDouble(ptr) {
           throw new FS.ErrnoError(err);
         }
         if (!parent.node_ops.symlink) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         return parent.node_ops.symlink(parent, newname, oldpath);
-      },rename:function (old_path, new_path) {
+      },rename:function(old_path, new_path) {
         var old_dirname = PATH.dirname(old_path);
         var new_dirname = PATH.dirname(new_path);
         var old_name = PATH.basename(old_path);
@@ -3889,24 +3788,24 @@ function copyTempDouble(ptr) {
           lookup = FS.lookupPath(new_path, { parent: true });
           new_dir = lookup.node;
         } catch (e) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBUSY);
+          throw new FS.ErrnoError(16);
         }
-        if (!old_dir || !new_dir) throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+        if (!old_dir || !new_dir) throw new FS.ErrnoError(2);
         // need to be part of the same mount
         if (old_dir.mount !== new_dir.mount) {
-          throw new FS.ErrnoError(ERRNO_CODES.EXDEV);
+          throw new FS.ErrnoError(18);
         }
         // source must exist
         var old_node = FS.lookupNode(old_dir, old_name);
         // old path should not be an ancestor of the new path
-        var relative = PATH.relative(old_path, new_dirname);
+        var relative = PATH_FS.relative(old_path, new_dirname);
         if (relative.charAt(0) !== '.') {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         // new path should not be an ancestor of the old path
-        relative = PATH.relative(new_path, old_dirname);
+        relative = PATH_FS.relative(new_path, old_dirname);
         if (relative.charAt(0) !== '.') {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOTEMPTY);
+          throw new FS.ErrnoError(39);
         }
         // see if the new path already exists
         var new_node;
@@ -3934,10 +3833,10 @@ function copyTempDouble(ptr) {
           throw new FS.ErrnoError(err);
         }
         if (!old_dir.node_ops.rename) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         if (FS.isMountpoint(old_node) || (new_node && FS.isMountpoint(new_node))) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBUSY);
+          throw new FS.ErrnoError(16);
         }
         // if we are going to change the parent, check write permissions
         if (new_dir !== old_dir) {
@@ -3970,7 +3869,7 @@ function copyTempDouble(ptr) {
         } catch(e) {
           console.log("FS.trackingDelegate['onMovePath']('"+old_path+"', '"+new_path+"') threw an exception: " + e.message);
         }
-      },rmdir:function (path) {
+      },rmdir:function(path) {
         var lookup = FS.lookupPath(path, { parent: true });
         var parent = lookup.node;
         var name = PATH.basename(path);
@@ -3980,10 +3879,10 @@ function copyTempDouble(ptr) {
           throw new FS.ErrnoError(err);
         }
         if (!parent.node_ops.rmdir) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         if (FS.isMountpoint(node)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBUSY);
+          throw new FS.ErrnoError(16);
         }
         try {
           if (FS.trackingDelegate['willDeletePath']) {
@@ -3999,14 +3898,14 @@ function copyTempDouble(ptr) {
         } catch(e) {
           console.log("FS.trackingDelegate['onDeletePath']('"+path+"') threw an exception: " + e.message);
         }
-      },readdir:function (path) {
+      },readdir:function(path) {
         var lookup = FS.lookupPath(path, { follow: true });
         var node = lookup.node;
         if (!node.node_ops.readdir) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOTDIR);
+          throw new FS.ErrnoError(20);
         }
         return node.node_ops.readdir(node);
-      },unlink:function (path) {
+      },unlink:function(path) {
         var lookup = FS.lookupPath(path, { parent: true });
         var parent = lookup.node;
         var name = PATH.basename(path);
@@ -4019,10 +3918,10 @@ function copyTempDouble(ptr) {
           throw new FS.ErrnoError(err);
         }
         if (!parent.node_ops.unlink) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         if (FS.isMountpoint(node)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBUSY);
+          throw new FS.ErrnoError(16);
         }
         try {
           if (FS.trackingDelegate['willDeletePath']) {
@@ -4038,29 +3937,29 @@ function copyTempDouble(ptr) {
         } catch(e) {
           console.log("FS.trackingDelegate['onDeletePath']('"+path+"') threw an exception: " + e.message);
         }
-      },readlink:function (path) {
+      },readlink:function(path) {
         var lookup = FS.lookupPath(path);
         var link = lookup.node;
         if (!link) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+          throw new FS.ErrnoError(2);
         }
         if (!link.node_ops.readlink) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
-        return PATH.resolve(FS.getPath(link.parent), link.node_ops.readlink(link));
-      },stat:function (path, dontFollow) {
+        return PATH_FS.resolve(FS.getPath(link.parent), link.node_ops.readlink(link));
+      },stat:function(path, dontFollow) {
         var lookup = FS.lookupPath(path, { follow: !dontFollow });
         var node = lookup.node;
         if (!node) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+          throw new FS.ErrnoError(2);
         }
         if (!node.node_ops.getattr) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         return node.node_ops.getattr(node);
-      },lstat:function (path) {
+      },lstat:function(path) {
         return FS.stat(path, true);
-      },chmod:function (path, mode, dontFollow) {
+      },chmod:function(path, mode, dontFollow) {
         var node;
         if (typeof path === 'string') {
           var lookup = FS.lookupPath(path, { follow: !dontFollow });
@@ -4069,21 +3968,21 @@ function copyTempDouble(ptr) {
           node = path;
         }
         if (!node.node_ops.setattr) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         node.node_ops.setattr(node, {
           mode: (mode & 4095) | (node.mode & ~4095),
           timestamp: Date.now()
         });
-      },lchmod:function (path, mode) {
+      },lchmod:function(path, mode) {
         FS.chmod(path, mode, true);
-      },fchmod:function (fd, mode) {
+      },fchmod:function(fd, mode) {
         var stream = FS.getStream(fd);
         if (!stream) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         FS.chmod(stream.node, mode);
-      },chown:function (path, uid, gid, dontFollow) {
+      },chown:function(path, uid, gid, dontFollow) {
         var node;
         if (typeof path === 'string') {
           var lookup = FS.lookupPath(path, { follow: !dontFollow });
@@ -4092,23 +3991,23 @@ function copyTempDouble(ptr) {
           node = path;
         }
         if (!node.node_ops.setattr) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         node.node_ops.setattr(node, {
           timestamp: Date.now()
           // we ignore the uid / gid for now
         });
-      },lchown:function (path, uid, gid) {
+      },lchown:function(path, uid, gid) {
         FS.chown(path, uid, gid, true);
-      },fchown:function (fd, uid, gid) {
+      },fchown:function(fd, uid, gid) {
         var stream = FS.getStream(fd);
         if (!stream) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         FS.chown(stream.node, uid, gid);
-      },truncate:function (path, len) {
+      },truncate:function(path, len) {
         if (len < 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         var node;
         if (typeof path === 'string') {
@@ -4118,13 +4017,13 @@ function copyTempDouble(ptr) {
           node = path;
         }
         if (!node.node_ops.setattr) {
-          throw new FS.ErrnoError(ERRNO_CODES.EPERM);
+          throw new FS.ErrnoError(1);
         }
         if (FS.isDir(node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EISDIR);
+          throw new FS.ErrnoError(21);
         }
         if (!FS.isFile(node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         var err = FS.nodePermissions(node, 'w');
         if (err) {
@@ -4134,24 +4033,24 @@ function copyTempDouble(ptr) {
           size: len,
           timestamp: Date.now()
         });
-      },ftruncate:function (fd, len) {
+      },ftruncate:function(fd, len) {
         var stream = FS.getStream(fd);
         if (!stream) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if ((stream.flags & 2097155) === 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         FS.truncate(stream.node, len);
-      },utime:function (path, atime, mtime) {
+      },utime:function(path, atime, mtime) {
         var lookup = FS.lookupPath(path, { follow: true });
         var node = lookup.node;
         node.node_ops.setattr(node, {
           timestamp: Math.max(atime, mtime)
         });
-      },open:function (path, flags, mode, fd_start, fd_end) {
+      },open:function(path, flags, mode, fd_start, fd_end) {
         if (path === "") {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+          throw new FS.ErrnoError(2);
         }
         flags = typeof flags === 'string' ? FS.modeStringToFlags(flags) : flags;
         mode = typeof mode === 'undefined' ? 438 /* 0666 */ : mode;
@@ -4180,7 +4079,7 @@ function copyTempDouble(ptr) {
           if (node) {
             // if O_CREAT and O_EXCL are set, error out if the node already exists
             if ((flags & 128)) {
-              throw new FS.ErrnoError(ERRNO_CODES.EEXIST);
+              throw new FS.ErrnoError(17);
             }
           } else {
             // node doesn't exist, try to create it
@@ -4189,7 +4088,7 @@ function copyTempDouble(ptr) {
           }
         }
         if (!node) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+          throw new FS.ErrnoError(2);
         }
         // can't truncate a device
         if (FS.isChrdev(node.mode)) {
@@ -4197,7 +4096,7 @@ function copyTempDouble(ptr) {
         }
         // if asked only for a directory, then this must be one
         if ((flags & 65536) && !FS.isDir(node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOTDIR);
+          throw new FS.ErrnoError(20);
         }
         // check permissions, if this is not a file we just created now (it is ok to
         // create and write to a file with read-only permissions; it is read-only
@@ -4235,7 +4134,7 @@ function copyTempDouble(ptr) {
           if (!FS.readFiles) FS.readFiles = {};
           if (!(path in FS.readFiles)) {
             FS.readFiles[path] = 1;
-            err('read file: ' + path);
+            console.log("FS.trackingDelegate error on read file: " + path);
           }
         }
         try {
@@ -4253,9 +4152,9 @@ function copyTempDouble(ptr) {
           console.log("FS.trackingDelegate['onOpenFile']('"+path+"', flags) threw an exception: " + e.message);
         }
         return stream;
-      },close:function (stream) {
+      },close:function(stream) {
         if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if (stream.getdents) stream.getdents = null; // free readdir state
         try {
@@ -4268,58 +4167,61 @@ function copyTempDouble(ptr) {
           FS.closeStream(stream.fd);
         }
         stream.fd = null;
-      },isClosed:function (stream) {
+      },isClosed:function(stream) {
         return stream.fd === null;
-      },llseek:function (stream, offset, whence) {
+      },llseek:function(stream, offset, whence) {
         if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if (!stream.seekable || !stream.stream_ops.llseek) {
-          throw new FS.ErrnoError(ERRNO_CODES.ESPIPE);
+          throw new FS.ErrnoError(29);
+        }
+        if (whence != 0 /* SEEK_SET */ && whence != 1 /* SEEK_CUR */ && whence != 2 /* SEEK_END */) {
+          throw new FS.ErrnoError(22);
         }
         stream.position = stream.stream_ops.llseek(stream, offset, whence);
         stream.ungotten = [];
         return stream.position;
-      },read:function (stream, buffer, offset, length, position) {
+      },read:function(stream, buffer, offset, length, position) {
         if (length < 0 || position < 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if ((stream.flags & 2097155) === 1) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if (FS.isDir(stream.node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EISDIR);
+          throw new FS.ErrnoError(21);
         }
         if (!stream.stream_ops.read) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         var seeking = typeof position !== 'undefined';
         if (!seeking) {
           position = stream.position;
         } else if (!stream.seekable) {
-          throw new FS.ErrnoError(ERRNO_CODES.ESPIPE);
+          throw new FS.ErrnoError(29);
         }
         var bytesRead = stream.stream_ops.read(stream, buffer, offset, length, position);
         if (!seeking) stream.position += bytesRead;
         return bytesRead;
-      },write:function (stream, buffer, offset, length, position, canOwn) {
+      },write:function(stream, buffer, offset, length, position, canOwn) {
         if (length < 0 || position < 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if ((stream.flags & 2097155) === 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if (FS.isDir(stream.node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EISDIR);
+          throw new FS.ErrnoError(21);
         }
         if (!stream.stream_ops.write) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         if (stream.flags & 1024) {
           // seek to the end before writing in append mode
@@ -4329,55 +4231,65 @@ function copyTempDouble(ptr) {
         if (!seeking) {
           position = stream.position;
         } else if (!stream.seekable) {
-          throw new FS.ErrnoError(ERRNO_CODES.ESPIPE);
+          throw new FS.ErrnoError(29);
         }
         var bytesWritten = stream.stream_ops.write(stream, buffer, offset, length, position, canOwn);
         if (!seeking) stream.position += bytesWritten;
         try {
           if (stream.path && FS.trackingDelegate['onWriteToFile']) FS.trackingDelegate['onWriteToFile'](stream.path);
         } catch(e) {
-          console.log("FS.trackingDelegate['onWriteToFile']('"+path+"') threw an exception: " + e.message);
+          console.log("FS.trackingDelegate['onWriteToFile']('"+stream.path+"') threw an exception: " + e.message);
         }
         return bytesWritten;
-      },allocate:function (stream, offset, length) {
+      },allocate:function(stream, offset, length) {
         if (FS.isClosed(stream)) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if (offset < 0 || length <= 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EINVAL);
+          throw new FS.ErrnoError(22);
         }
         if ((stream.flags & 2097155) === 0) {
-          throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+          throw new FS.ErrnoError(9);
         }
         if (!FS.isFile(stream.node.mode) && !FS.isDir(stream.node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENODEV);
+          throw new FS.ErrnoError(19);
         }
         if (!stream.stream_ops.allocate) {
-          throw new FS.ErrnoError(ERRNO_CODES.EOPNOTSUPP);
+          throw new FS.ErrnoError(95);
         }
         stream.stream_ops.allocate(stream, offset, length);
-      },mmap:function (stream, buffer, offset, length, position, prot, flags) {
-        // TODO if PROT is PROT_WRITE, make sure we have write access
+      },mmap:function(stream, buffer, offset, length, position, prot, flags) {
+        // User requests writing to file (prot & PROT_WRITE != 0).
+        // Checking if we have permissions to write to the file unless
+        // MAP_PRIVATE flag is set. According to POSIX spec it is possible
+        // to write to file opened in read-only mode with MAP_PRIVATE flag,
+        // as all modifications will be visible only in the memory of
+        // the current process.
+        if ((prot & 2) !== 0
+            && (flags & 2) === 0
+            && (stream.flags & 2097155) !== 2) {
+          throw new FS.ErrnoError(13);
+        }
         if ((stream.flags & 2097155) === 1) {
-          throw new FS.ErrnoError(ERRNO_CODES.EACCES);
+          throw new FS.ErrnoError(13);
         }
         if (!stream.stream_ops.mmap) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENODEV);
+          throw new FS.ErrnoError(19);
         }
         return stream.stream_ops.mmap(stream, buffer, offset, length, position, prot, flags);
-      },msync:function (stream, buffer, offset, length, mmapFlags) {
+      },msync:function(stream, buffer, offset, length, mmapFlags) {
         if (!stream || !stream.stream_ops.msync) {
           return 0;
         }
         return stream.stream_ops.msync(stream, buffer, offset, length, mmapFlags);
-      },munmap:function (stream) {
+      },munmap:function(stream) {
         return 0;
-      },ioctl:function (stream, cmd, arg) {
+      },ioctl:function(stream, cmd, arg) {
         if (!stream.stream_ops.ioctl) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOTTY);
+          throw new FS.ErrnoError(25);
         }
         return stream.stream_ops.ioctl(stream, cmd, arg);
-      },readFile:function (path, opts) {
+      },readFile:function(path, opts) {
         opts = opts || {};
         opts.flags = opts.flags || 'r';
         opts.encoding = opts.encoding || 'binary';
@@ -4397,7 +4309,7 @@ function copyTempDouble(ptr) {
         }
         FS.close(stream);
         return ret;
-      },writeFile:function (path, data, opts) {
+      },writeFile:function(path, data, opts) {
         opts = opts || {};
         opts.flags = opts.flags || 'w';
         var stream = FS.open(path, opts.flags, opts.mode);
@@ -4411,26 +4323,26 @@ function copyTempDouble(ptr) {
           throw new Error('Unsupported data type');
         }
         FS.close(stream);
-      },cwd:function () {
+      },cwd:function() {
         return FS.currentPath;
-      },chdir:function (path) {
+      },chdir:function(path) {
         var lookup = FS.lookupPath(path, { follow: true });
         if (lookup.node === null) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOENT);
+          throw new FS.ErrnoError(2);
         }
         if (!FS.isDir(lookup.node.mode)) {
-          throw new FS.ErrnoError(ERRNO_CODES.ENOTDIR);
+          throw new FS.ErrnoError(20);
         }
         var err = FS.nodePermissions(lookup.node, 'x');
         if (err) {
           throw new FS.ErrnoError(err);
         }
         FS.currentPath = lookup.path;
-      },createDefaultDirectories:function () {
+      },createDefaultDirectories:function() {
         FS.mkdir('/tmp');
         FS.mkdir('/home');
         FS.mkdir('/home/web_user');
-      },createDefaultDevices:function () {
+      },createDefaultDevices:function() {
         // create /dev
         FS.mkdir('/dev');
         // setup /dev/null
@@ -4448,16 +4360,25 @@ function copyTempDouble(ptr) {
         FS.mkdev('/dev/tty1', FS.makedev(6, 0));
         // setup /dev/[u]random
         var random_device;
-        if (typeof crypto !== 'undefined') {
+        if (typeof crypto === 'object' && typeof crypto['getRandomValues'] === 'function') {
           // for modern web browsers
           var randomBuffer = new Uint8Array(1);
           random_device = function() { crypto.getRandomValues(randomBuffer); return randomBuffer[0]; };
-        } else if (ENVIRONMENT_IS_NODE) {
-          // for nodejs
-          random_device = function() { return require('crypto')['randomBytes'](1)[0]; };
-        } else {
-          // default for ES5 platforms
-          random_device = function() { return (Math.random()*256)|0; };
+        } else
+        if (ENVIRONMENT_IS_NODE) {
+          // for nodejs with or without crypto support included
+          try {
+            var crypto_module = require('crypto');
+            // nodejs has crypto support
+            random_device = function() { return crypto_module['randomBytes'](1)[0]; };
+          } catch (e) {
+            // nodejs doesn't have crypto support
+          }
+        } else
+        {}
+        if (!random_device) {
+          // we couldn't find a proper implementation, as Math.random() is not suitable for /dev/random, see emscripten-core/emscripten/pull/7096
+          random_device = function() { abort("no cryptographic support found for random_device. consider polyfilling it if you want to use something insecure like Math.random(), e.g. put this in a --pre-js: var crypto = { getRandomValues: function(array) { for (var i = 0; i < array.length; i++) array[i] = (Math.random()*256)|0 } };"); };
         }
         FS.createDevice('/dev', 'random', random_device);
         FS.createDevice('/dev', 'urandom', random_device);
@@ -4465,7 +4386,7 @@ function copyTempDouble(ptr) {
         // just create the tmp dirs that reside in it commonly
         FS.mkdir('/dev/shm');
         FS.mkdir('/dev/shm/tmp');
-      },createSpecialDirectories:function () {
+      },createSpecialDirectories:function() {
         // create /proc/self/fd which allows /proc/self/fd/6 => readlink gives the name of the stream for fd 6 (see test_unistd_ttyname)
         FS.mkdir('/proc');
         FS.mkdir('/proc/self');
@@ -4477,7 +4398,7 @@ function copyTempDouble(ptr) {
               lookup: function(parent, name) {
                 var fd = +name;
                 var stream = FS.getStream(fd);
-                if (!stream) throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+                if (!stream) throw new FS.ErrnoError(9);
                 var ret = {
                   parent: null,
                   mount: { mountpoint: 'fake' },
@@ -4490,7 +4411,7 @@ function copyTempDouble(ptr) {
             return node;
           }
         }, {}, '/proc/self/fd');
-      },createStandardStreams:function () {
+      },createStandardStreams:function() {
         // TODO deprecate the old functionality of a single
         // input / output callback and that utilizes FS.createDevice
         // and instead require a unique set of stream ops
@@ -4517,17 +4438,14 @@ function copyTempDouble(ptr) {
   
         // open default streams for the stdin, stdout and stderr devices
         var stdin = FS.open('/dev/stdin', 'r');
-        assert(stdin.fd === 0, 'invalid handle for stdin (' + stdin.fd + ')');
-  
         var stdout = FS.open('/dev/stdout', 'w');
-        assert(stdout.fd === 1, 'invalid handle for stdout (' + stdout.fd + ')');
-  
         var stderr = FS.open('/dev/stderr', 'w');
+        assert(stdin.fd === 0, 'invalid handle for stdin (' + stdin.fd + ')');
+        assert(stdout.fd === 1, 'invalid handle for stdout (' + stdout.fd + ')');
         assert(stderr.fd === 2, 'invalid handle for stderr (' + stderr.fd + ')');
-      },ensureErrnoError:function () {
+      },ensureErrnoError:function() {
         if (FS.ErrnoError) return;
         FS.ErrnoError = function ErrnoError(errno, node) {
-          //err(stackTrace()); // useful for debugging
           this.node = node;
           this.setErrno = function(errno) {
             this.errno = errno;
@@ -4540,18 +4458,23 @@ function copyTempDouble(ptr) {
           };
           this.setErrno(errno);
           this.message = ERRNO_MESSAGES[errno];
-          // Node.js compatibility: assigning on this.stack fails on Node 4 (but fixed on Node 8)
-          if (this.stack) Object.defineProperty(this, "stack", { value: (new Error).stack, writable: true });
-          if (this.stack) this.stack = demangleAll(this.stack);
+  
+          // Try to get a maximally helpful stack trace. On Node.js, getting Error.stack
+          // now ensures it shows what we want.
+          if (this.stack) {
+            // Define the stack property for Node.js 4, which otherwise errors on the next line.
+            Object.defineProperty(this, "stack", { value: (new Error).stack, writable: true });
+            this.stack = demangleAll(this.stack);
+          }
         };
         FS.ErrnoError.prototype = new Error();
         FS.ErrnoError.prototype.constructor = FS.ErrnoError;
         // Some errors may happen quite a bit, to avoid overhead we reuse them (and suffer a lack of stack info)
-        [ERRNO_CODES.ENOENT].forEach(function(code) {
+        [2].forEach(function(code) {
           FS.genericErrors[code] = new FS.ErrnoError(code);
           FS.genericErrors[code].stack = '<generic error, no stack>';
         });
-      },staticInit:function () {
+      },staticInit:function() {
         FS.ensureErrnoError();
   
         FS.nameTable = new Array(4096);
@@ -4568,7 +4491,7 @@ function copyTempDouble(ptr) {
           'NODEFS': NODEFS,
           'WORKERFS': WORKERFS,
         };
-      },init:function (input, output, error) {
+      },init:function(input, output, error) {
         assert(!FS.init.initialized, 'FS.init was previously called. If you want to initialize later with custom parameters, remove any earlier calls (note that one is automatically added to the generated code)');
         FS.init.initialized = true;
   
@@ -4580,7 +4503,7 @@ function copyTempDouble(ptr) {
         Module['stderr'] = error || Module['stderr'];
   
         FS.createStandardStreams();
-      },quit:function () {
+      },quit:function() {
         FS.init.initialized = false;
         // force-flush all streams, so we get musl std streams printed out
         var fflush = Module['_fflush'];
@@ -4593,20 +4516,20 @@ function copyTempDouble(ptr) {
           }
           FS.close(stream);
         }
-      },getMode:function (canRead, canWrite) {
+      },getMode:function(canRead, canWrite) {
         var mode = 0;
         if (canRead) mode |= 292 | 73;
         if (canWrite) mode |= 146;
         return mode;
-      },joinPath:function (parts, forceRelative) {
+      },joinPath:function(parts, forceRelative) {
         var path = PATH.join.apply(null, parts);
         if (forceRelative && path[0] == '/') path = path.substr(1);
         return path;
-      },absolutePath:function (relative, base) {
-        return PATH.resolve(base, relative);
-      },standardizePath:function (path) {
+      },absolutePath:function(relative, base) {
+        return PATH_FS.resolve(base, relative);
+      },standardizePath:function(path) {
         return PATH.normalize(path);
-      },findObject:function (path, dontResolveLastLink) {
+      },findObject:function(path, dontResolveLastLink) {
         var ret = FS.analyzePath(path, dontResolveLastLink);
         if (ret.exists) {
           return ret.object;
@@ -4614,7 +4537,7 @@ function copyTempDouble(ptr) {
           ___setErrNo(ret.error);
           return null;
         }
-      },analyzePath:function (path, dontResolveLastLink) {
+      },analyzePath:function(path, dontResolveLastLink) {
         // operate from within the context of the symlink's target
         try {
           var lookup = FS.lookupPath(path, { follow: !dontResolveLastLink });
@@ -4641,11 +4564,11 @@ function copyTempDouble(ptr) {
           ret.error = e.errno;
         };
         return ret;
-      },createFolder:function (parent, name, canRead, canWrite) {
+      },createFolder:function(parent, name, canRead, canWrite) {
         var path = PATH.join2(typeof parent === 'string' ? parent : FS.getPath(parent), name);
         var mode = FS.getMode(canRead, canWrite);
         return FS.mkdir(path, mode);
-      },createPath:function (parent, path, canRead, canWrite) {
+      },createPath:function(parent, path, canRead, canWrite) {
         parent = typeof parent === 'string' ? parent : FS.getPath(parent);
         var parts = path.split('/').reverse();
         while (parts.length) {
@@ -4660,11 +4583,11 @@ function copyTempDouble(ptr) {
           parent = current;
         }
         return current;
-      },createFile:function (parent, name, properties, canRead, canWrite) {
+      },createFile:function(parent, name, properties, canRead, canWrite) {
         var path = PATH.join2(typeof parent === 'string' ? parent : FS.getPath(parent), name);
         var mode = FS.getMode(canRead, canWrite);
         return FS.create(path, mode);
-      },createDataFile:function (parent, name, data, canRead, canWrite, canOwn) {
+      },createDataFile:function(parent, name, data, canRead, canWrite, canOwn) {
         var path = name ? PATH.join2(typeof parent === 'string' ? parent : FS.getPath(parent), name) : parent;
         var mode = FS.getMode(canRead, canWrite);
         var node = FS.create(path, mode);
@@ -4682,7 +4605,7 @@ function copyTempDouble(ptr) {
           FS.chmod(node, mode);
         }
         return node;
-      },createDevice:function (parent, name, input, output) {
+      },createDevice:function(parent, name, input, output) {
         var path = PATH.join2(typeof parent === 'string' ? parent : FS.getPath(parent), name);
         var mode = FS.getMode(!!input, !!output);
         if (!FS.createDevice.major) FS.createDevice.major = 64;
@@ -4706,10 +4629,10 @@ function copyTempDouble(ptr) {
               try {
                 result = input();
               } catch (e) {
-                throw new FS.ErrnoError(ERRNO_CODES.EIO);
+                throw new FS.ErrnoError(5);
               }
               if (result === undefined && bytesRead === 0) {
-                throw new FS.ErrnoError(ERRNO_CODES.EAGAIN);
+                throw new FS.ErrnoError(11);
               }
               if (result === null || result === undefined) break;
               bytesRead++;
@@ -4725,7 +4648,7 @@ function copyTempDouble(ptr) {
               try {
                 output(buffer[offset+i]);
               } catch (e) {
-                throw new FS.ErrnoError(ERRNO_CODES.EIO);
+                throw new FS.ErrnoError(5);
               }
             }
             if (length) {
@@ -4735,20 +4658,20 @@ function copyTempDouble(ptr) {
           }
         });
         return FS.mkdev(path, mode, dev);
-      },createLink:function (parent, name, target, canRead, canWrite) {
+      },createLink:function(parent, name, target, canRead, canWrite) {
         var path = PATH.join2(typeof parent === 'string' ? parent : FS.getPath(parent), name);
         return FS.symlink(target, path);
-      },forceLoadFile:function (obj) {
+      },forceLoadFile:function(obj) {
         if (obj.isDevice || obj.isFolder || obj.link || obj.contents) return true;
         var success = true;
         if (typeof XMLHttpRequest !== 'undefined') {
           throw new Error("Lazy loading should have been performed (contents set) in createLazyFile, but it was not. Lazy loading only works in web workers. Use --embed-file or --preload-file in emcc on the main thread.");
-        } else if (Module['read']) {
+        } else if (read_) {
           // Command-line.
           try {
             // WARNING: Can't read binary files in V8's d8 or tracemonkey's js, as
             //          read() will try to parse UTF8.
-            obj.contents = intArrayFromString(Module['read'](obj.url), true);
+            obj.contents = intArrayFromString(read_(obj.url), true);
             obj.usedBytes = obj.contents.length;
           } catch (e) {
             success = false;
@@ -4756,9 +4679,9 @@ function copyTempDouble(ptr) {
         } else {
           throw new Error('Cannot load without read() or XMLHttpRequest.');
         }
-        if (!success) ___setErrNo(ERRNO_CODES.EIO);
+        if (!success) ___setErrNo(5);
         return success;
-      },createLazyFile:function (parent, name, url, canRead, canWrite) {
+      },createLazyFile:function(parent, name, url, canRead, canWrite) {
         // Lazy chunked Uint8Array (implements get and length from Uint8Array). Actual getting is abstracted away for eventual reuse.
         function LazyUint8Array() {
           this.lengthKnown = false;
@@ -4771,10 +4694,10 @@ function copyTempDouble(ptr) {
           var chunkOffset = idx % this.chunkSize;
           var chunkNum = (idx / this.chunkSize)|0;
           return this.getter(chunkNum)[chunkOffset];
-        }
+        };
         LazyUint8Array.prototype.setDataGetter = function LazyUint8Array_setDataGetter(getter) {
           this.getter = getter;
-        }
+        };
         LazyUint8Array.prototype.cacheLength = function LazyUint8Array_cacheLength() {
           // Find length
           var xhr = new XMLHttpRequest();
@@ -4837,7 +4760,7 @@ function copyTempDouble(ptr) {
           this._length = datalength;
           this._chunkSize = chunkSize;
           this.lengthKnown = true;
-        }
+        };
         if (typeof XMLHttpRequest !== 'undefined') {
           if (!ENVIRONMENT_IS_WORKER) throw 'Cannot do synchronous binary XHRs outside webworkers in modern browsers. Use --embed-file or --preload-file in emcc';
           var lazyArray = new LazyUint8Array();
@@ -4888,7 +4811,7 @@ function copyTempDouble(ptr) {
           var fn = node.stream_ops[key];
           stream_ops[key] = function forceLoadLazyFile() {
             if (!FS.forceLoadFile(node)) {
-              throw new FS.ErrnoError(ERRNO_CODES.EIO);
+              throw new FS.ErrnoError(5);
             }
             return fn.apply(null, arguments);
           };
@@ -4896,7 +4819,7 @@ function copyTempDouble(ptr) {
         // use a custom read function
         stream_ops.read = function stream_ops_read(stream, buffer, offset, length, position) {
           if (!FS.forceLoadFile(node)) {
-            throw new FS.ErrnoError(ERRNO_CODES.EIO);
+            throw new FS.ErrnoError(5);
           }
           var contents = stream.node.contents;
           if (position >= contents.length)
@@ -4916,11 +4839,11 @@ function copyTempDouble(ptr) {
         };
         node.stream_ops = stream_ops;
         return node;
-      },createPreloadedFile:function (parent, name, url, canRead, canWrite, onload, onerror, dontCreateFile, canOwn, preFinish) {
+      },createPreloadedFile:function(parent, name, url, canRead, canWrite, onload, onerror, dontCreateFile, canOwn, preFinish) {
         Browser.init(); // XXX perhaps this method should move onto Browser?
         // TODO we should allow people to just pass in a complete filename instead
         // of parent and name being that we just join them anyways
-        var fullname = name ? PATH.resolve(PATH.join2(parent, name)) : parent;
+        var fullname = name ? PATH_FS.resolve(PATH.join2(parent, name)) : parent;
         var dep = getUniqueRunDependency('cp ' + fullname); // might have several active requests for the same fullname
         function processData(byteArray) {
           function finish(byteArray) {
@@ -4952,11 +4875,11 @@ function copyTempDouble(ptr) {
         } else {
           processData(url);
         }
-      },indexedDB:function () {
+      },indexedDB:function() {
         return window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
-      },DB_NAME:function () {
+      },DB_NAME:function() {
         return 'EM_FS_' + window.location.pathname;
-      },DB_VERSION:20,DB_STORE_NAME:"FILE_DATA",saveFilesToDB:function (paths, onload, onerror) {
+      },DB_VERSION:20,DB_STORE_NAME:"FILE_DATA",saveFilesToDB:function(paths, onload, onerror) {
         onload = onload || function(){};
         onerror = onerror || function(){};
         var indexedDB = FS.indexedDB();
@@ -4986,7 +4909,7 @@ function copyTempDouble(ptr) {
           transaction.onerror = onerror;
         };
         openRequest.onerror = onerror;
-      },loadFilesFromDB:function (paths, onload, onerror) {
+      },loadFilesFromDB:function(paths, onload, onerror) {
         onload = onload || function(){};
         onerror = onerror || function(){};
         var indexedDB = FS.indexedDB();
@@ -5024,7 +4947,7 @@ function copyTempDouble(ptr) {
           transaction.onerror = onerror;
         };
         openRequest.onerror = onerror;
-      }};var SYSCALLS={DEFAULT_POLLMASK:5,mappings:{},umask:511,calculateAt:function (dirfd, path) {
+      }};var SYSCALLS={DEFAULT_POLLMASK:5,mappings:{},umask:511,calculateAt:function(dirfd, path) {
         if (path[0] !== '/') {
           // relative path
           var dir;
@@ -5032,19 +4955,19 @@ function copyTempDouble(ptr) {
             dir = FS.cwd();
           } else {
             var dirstream = FS.getStream(dirfd);
-            if (!dirstream) throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+            if (!dirstream) throw new FS.ErrnoError(9);
             dir = dirstream.path;
           }
           path = PATH.join2(dir, path);
         }
         return path;
-      },doStat:function (func, path, buf) {
+      },doStat:function(func, path, buf) {
         try {
           var stat = func(path);
         } catch (e) {
           if (e && e.node && PATH.normalize(path) !== PATH.normalize(FS.getPath(e.node))) {
             // an error occurred while trying to look up the path; we should just report ENOTDIR
-            return -ERRNO_CODES.ENOTDIR;
+            return -20;
           }
           throw e;
         }
@@ -5057,28 +4980,28 @@ function copyTempDouble(ptr) {
         HEAP32[(((buf)+(24))>>2)]=stat.gid;
         HEAP32[(((buf)+(28))>>2)]=stat.rdev;
         HEAP32[(((buf)+(32))>>2)]=0;
-        HEAP32[(((buf)+(36))>>2)]=stat.size;
-        HEAP32[(((buf)+(40))>>2)]=4096;
-        HEAP32[(((buf)+(44))>>2)]=stat.blocks;
-        HEAP32[(((buf)+(48))>>2)]=(stat.atime.getTime() / 1000)|0;
-        HEAP32[(((buf)+(52))>>2)]=0;
-        HEAP32[(((buf)+(56))>>2)]=(stat.mtime.getTime() / 1000)|0;
+        (tempI64 = [stat.size>>>0,(tempDouble=stat.size,(+(Math_abs(tempDouble))) >= 1.0 ? (tempDouble > 0.0 ? ((Math_min((+(Math_floor((tempDouble)/4294967296.0))), 4294967295.0))|0)>>>0 : (~~((+(Math_ceil((tempDouble - +(((~~(tempDouble)))>>>0))/4294967296.0)))))>>>0) : 0)],HEAP32[(((buf)+(40))>>2)]=tempI64[0],HEAP32[(((buf)+(44))>>2)]=tempI64[1]);
+        HEAP32[(((buf)+(48))>>2)]=4096;
+        HEAP32[(((buf)+(52))>>2)]=stat.blocks;
+        HEAP32[(((buf)+(56))>>2)]=(stat.atime.getTime() / 1000)|0;
         HEAP32[(((buf)+(60))>>2)]=0;
-        HEAP32[(((buf)+(64))>>2)]=(stat.ctime.getTime() / 1000)|0;
+        HEAP32[(((buf)+(64))>>2)]=(stat.mtime.getTime() / 1000)|0;
         HEAP32[(((buf)+(68))>>2)]=0;
-        HEAP32[(((buf)+(72))>>2)]=stat.ino;
+        HEAP32[(((buf)+(72))>>2)]=(stat.ctime.getTime() / 1000)|0;
+        HEAP32[(((buf)+(76))>>2)]=0;
+        (tempI64 = [stat.ino>>>0,(tempDouble=stat.ino,(+(Math_abs(tempDouble))) >= 1.0 ? (tempDouble > 0.0 ? ((Math_min((+(Math_floor((tempDouble)/4294967296.0))), 4294967295.0))|0)>>>0 : (~~((+(Math_ceil((tempDouble - +(((~~(tempDouble)))>>>0))/4294967296.0)))))>>>0) : 0)],HEAP32[(((buf)+(80))>>2)]=tempI64[0],HEAP32[(((buf)+(84))>>2)]=tempI64[1]);
         return 0;
-      },doMsync:function (addr, stream, len, flags) {
+      },doMsync:function(addr, stream, len, flags) {
         var buffer = new Uint8Array(HEAPU8.subarray(addr, addr + len));
         FS.msync(stream, buffer, 0, len, flags);
-      },doMkdir:function (path, mode) {
+      },doMkdir:function(path, mode) {
         // remove a trailing slash, if one - /a/b/ has basename of '', but
         // we want to create b in the context of this function
         path = PATH.normalize(path);
         if (path[path.length-1] === '/') path = path.substr(0, path.length-1);
         FS.mkdir(path, mode, 0);
         return 0;
-      },doMknod:function (path, mode, dev) {
+      },doMknod:function(path, mode, dev) {
         // we don't want this in the JS API as it uses mknod to create all nodes.
         switch (mode & 61440) {
           case 32768:
@@ -5087,12 +5010,12 @@ function copyTempDouble(ptr) {
           case 4096:
           case 49152:
             break;
-          default: return -ERRNO_CODES.EINVAL;
+          default: return -22;
         }
         FS.mknod(path, mode, dev);
         return 0;
-      },doReadlink:function (path, buf, bufsize) {
-        if (bufsize <= 0) return -ERRNO_CODES.EINVAL;
+      },doReadlink:function(path, buf, bufsize) {
+        if (bufsize <= 0) return -22;
         var ret = FS.readlink(path);
   
         var len = Math.min(bufsize, lengthBytesUTF8(ret));
@@ -5103,27 +5026,30 @@ function copyTempDouble(ptr) {
         HEAP8[buf+len] = endChar;
   
         return len;
-      },doAccess:function (path, amode) {
+      },doAccess:function(path, amode) {
         if (amode & ~7) {
           // need a valid mode
-          return -ERRNO_CODES.EINVAL;
+          return -22;
         }
         var node;
         var lookup = FS.lookupPath(path, { follow: true });
         node = lookup.node;
+        if (!node) {
+          return -2;
+        }
         var perms = '';
         if (amode & 4) perms += 'r';
         if (amode & 2) perms += 'w';
         if (amode & 1) perms += 'x';
         if (perms /* otherwise, they've just passed F_OK */ && FS.nodePermissions(node, perms)) {
-          return -ERRNO_CODES.EACCES;
+          return -13;
         }
         return 0;
-      },doDup:function (path, flags, suggestFD) {
+      },doDup:function(path, flags, suggestFD) {
         var suggest = FS.getStream(suggestFD);
         if (suggest) FS.close(suggest);
         return FS.open(path, flags, 0, suggestFD, suggestFD).fd;
-      },doReadv:function (stream, iov, iovcnt, offset) {
+      },doReadv:function(stream, iov, iovcnt, offset) {
         var ret = 0;
         for (var i = 0; i < iovcnt; i++) {
           var ptr = HEAP32[(((iov)+(i*8))>>2)];
@@ -5134,7 +5060,7 @@ function copyTempDouble(ptr) {
           if (curr < len) break; // nothing more to read
         }
         return ret;
-      },doWritev:function (stream, iov, iovcnt, offset) {
+      },doWritev:function(stream, iov, iovcnt, offset) {
         var ret = 0;
         for (var i = 0; i < iovcnt; i++) {
           var ptr = HEAP32[(((iov)+(i*8))>>2)];
@@ -5144,43 +5070,40 @@ function copyTempDouble(ptr) {
           ret += curr;
         }
         return ret;
-      },varargs:0,get:function (varargs) {
+      },varargs:0,get:function(varargs) {
         SYSCALLS.varargs += 4;
         var ret = HEAP32[(((SYSCALLS.varargs)-(4))>>2)];
         return ret;
-      },getStr:function () {
-        var ret = Pointer_stringify(SYSCALLS.get());
+      },getStr:function() {
+        var ret = UTF8ToString(SYSCALLS.get());
         return ret;
-      },getStreamFromFD:function () {
+      },getStreamFromFD:function() {
         var stream = FS.getStream(SYSCALLS.get());
-        if (!stream) throw new FS.ErrnoError(ERRNO_CODES.EBADF);
+        if (!stream) throw new FS.ErrnoError(9);
         return stream;
-      },getSocketFromFD:function () {
-        var socket = SOCKFS.getSocket(SYSCALLS.get());
-        if (!socket) throw new FS.ErrnoError(ERRNO_CODES.EBADF);
-        return socket;
-      },getSocketAddress:function (allowNull) {
-        var addrp = SYSCALLS.get(), addrlen = SYSCALLS.get();
-        if (allowNull && addrp === 0) return null;
-        var info = __read_sockaddr(addrp, addrlen);
-        if (info.errno) throw new FS.ErrnoError(info.errno);
-        info.addr = DNS.lookup_addr(info.addr) || info.addr;
-        return info;
-      },get64:function () {
+      },get64:function() {
         var low = SYSCALLS.get(), high = SYSCALLS.get();
         if (low >= 0) assert(high === 0);
         else assert(high === -1);
         return low;
-      },getZero:function () {
+      },getZero:function() {
         assert(SYSCALLS.get() === 0);
       }};function ___syscall140(which, varargs) {SYSCALLS.varargs = varargs;
   try {
    // llseek
       var stream = SYSCALLS.getStreamFromFD(), offset_high = SYSCALLS.get(), offset_low = SYSCALLS.get(), result = SYSCALLS.get(), whence = SYSCALLS.get();
-      // NOTE: offset_high is unused - Emscripten's off_t is 32-bit
-      var offset = offset_low;
+      var HIGH_OFFSET = 0x100000000; // 2^32
+      // use an unsigned operator on low and shift high by 32-bits
+      var offset = offset_high * HIGH_OFFSET + (offset_low >>> 0);
+  
+      var DOUBLE_LIMIT = 0x20000000000000; // 2^53
+      // we also check for equality since DOUBLE_LIMIT + 1 == DOUBLE_LIMIT
+      if (offset <= -DOUBLE_LIMIT || offset >= DOUBLE_LIMIT) {
+        return -75;
+      }
+  
       FS.llseek(stream, offset, whence);
-      HEAP32[((result)>>2)]=stream.position;
+      (tempI64 = [stream.position>>>0,(tempDouble=stream.position,(+(Math_abs(tempDouble))) >= 1.0 ? (tempDouble > 0.0 ? ((Math_min((+(Math_floor((tempDouble)/4294967296.0))), 4294967295.0))|0)>>>0 : (~~((+(Math_ceil((tempDouble - +(((~~(tempDouble)))>>>0))/4294967296.0)))))>>>0) : 0)],HEAP32[((result)>>2)]=tempI64[0],HEAP32[(((result)+(4))>>2)]=tempI64[1]);
       if (stream.getdents && offset === 0 && whence === 0) stream.getdents = null; // reset readdir state
       return 0;
     } catch (e) {
@@ -5219,7 +5142,7 @@ function copyTempDouble(ptr) {
         case 0: {
           var arg = SYSCALLS.get();
           if (arg < 0) {
-            return -ERRNO_CODES.EINVAL;
+            return -22;
           }
           var newStream;
           newStream = FS.open(stream.path, stream.flags, 0, arg);
@@ -5236,7 +5159,8 @@ function copyTempDouble(ptr) {
           return 0;
         }
         case 12:
-        case 12: {
+        /* case 12: Currently in musl F_GETLK64 has same value as F_GETLK, so omitted to avoid duplicate case blocks. If that changes, uncomment this */ {
+          
           var arg = SYSCALLS.get();
           var offset = 0;
           // We're always unlocked.
@@ -5245,18 +5169,20 @@ function copyTempDouble(ptr) {
         }
         case 13:
         case 14:
-        case 13:
-        case 14:
+        /* case 13: Currently in musl F_SETLK64 has same value as F_SETLK, so omitted to avoid duplicate case blocks. If that changes, uncomment this */
+        /* case 14: Currently in musl F_SETLKW64 has same value as F_SETLKW, so omitted to avoid duplicate case blocks. If that changes, uncomment this */
+          
+          
           return 0; // Pretend that the locking is successful.
         case 16:
         case 8:
-          return -ERRNO_CODES.EINVAL; // These are for sockets. We don't have them fully implemented yet.
+          return -22; // These are for sockets. We don't have them fully implemented yet.
         case 9:
           // musl trusts getown return values, due to a bug where they must be, as they overlap with errors. just return -1 here, so fnctl() returns that, and we set errno ourselves.
-          ___setErrNo(ERRNO_CODES.EINVAL);
+          ___setErrNo(22);
           return -1;
         default: {
-          return -ERRNO_CODES.EINVAL;
+          return -22;
         }
       }
     } catch (e) {
@@ -5290,7 +5216,7 @@ function copyTempDouble(ptr) {
   function ___syscall5(which, varargs) {SYSCALLS.varargs = varargs;
   try {
    // open
-      var pathname = SYSCALLS.getStr(), flags = SYSCALLS.get(), mode = SYSCALLS.get() // optional TODO
+      var pathname = SYSCALLS.getStr(), flags = SYSCALLS.get(), mode = SYSCALLS.get(); // optional TODO
       var stream = FS.open(pathname, flags, mode);
       return stream.fd;
     } catch (e) {
@@ -5306,7 +5232,7 @@ function copyTempDouble(ptr) {
       switch (op) {
         case 21509:
         case 21505: {
-          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          if (!stream.tty) return -25;
           return 0;
         }
         case 21510:
@@ -5315,18 +5241,18 @@ function copyTempDouble(ptr) {
         case 21506:
         case 21507:
         case 21508: {
-          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          if (!stream.tty) return -25;
           return 0; // no-op, not actually adjusting terminal settings
         }
         case 21519: {
-          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          if (!stream.tty) return -25;
           var argp = SYSCALLS.get();
           HEAP32[((argp)>>2)]=0;
           return 0;
         }
         case 21520: {
-          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
-          return -ERRNO_CODES.EINVAL; // not supported
+          if (!stream.tty) return -25;
+          return -22; // not supported
         }
         case 21531: {
           var argp = SYSCALLS.get();
@@ -5335,14 +5261,14 @@ function copyTempDouble(ptr) {
         case 21523: {
           // TODO: in theory we should write to the winsize struct that gets
           // passed in, but for now musl doesn't read anything on it
-          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          if (!stream.tty) return -25;
           return 0;
         }
         case 21524: {
           // TODO: technically, this ioctl call should change the window size.
           // but, since emscripten doesn't have any concept of a terminal window
           // yet, we'll just silently throw it away as we do TIOCGWINSZ
-          if (!stream.tty) return -ERRNO_CODES.ENOTTY;
+          if (!stream.tty) return -25;
           return 0;
         }
         default: abort('bad ioctl syscall ' + op);
@@ -5365,16 +5291,17 @@ function copyTempDouble(ptr) {
   }
   }
 
-  function ___syscall91(which, varargs) {SYSCALLS.varargs = varargs;
-  try {
-   // munmap
-      var addr = SYSCALLS.get(), len = SYSCALLS.get();
+  
+  function __emscripten_syscall_munmap(addr, len) {
+      if (addr === -1 || len === 0) {
+        return -22;
+      }
       // TODO: support unmmap'ing parts of allocations
       var info = SYSCALLS.mappings[addr];
       if (!info) return 0;
       if (len === info.len) {
         var stream = FS.getStream(info.fd);
-        SYSCALLS.doMsync(addr, stream, len, info.flags)
+        SYSCALLS.doMsync(addr, stream, len, info.flags);
         FS.munmap(stream);
         SYSCALLS.mappings[addr] = null;
         if (info.allocated) {
@@ -5382,6 +5309,11 @@ function copyTempDouble(ptr) {
         }
       }
       return 0;
+    }function ___syscall91(which, varargs) {SYSCALLS.varargs = varargs;
+  try {
+   // munmap
+      var addr = SYSCALLS.get(), len = SYSCALLS.get();
+      return __emscripten_syscall_munmap(addr, len);
     } catch (e) {
     if (typeof FS === 'undefined' || !(e instanceof FS.ErrnoError)) abort(e);
     return -e.errno;
@@ -5710,6 +5642,53 @@ function copyTempDouble(ptr) {
         return handle.$$.ptrType.registeredClass.name;
       }
       throwBindingError(getInstanceTypeName(obj) + ' instance already deleted');
+    }
+  
+  
+  var finalizationGroup=false;
+  
+  function detachFinalizer(handle) {}
+  
+  
+  function runDestructor($$) {
+      if ($$.smartPtr) {
+          $$.smartPtrType.rawDestructor($$.smartPtr);
+      } else {
+          $$.ptrType.registeredClass.rawDestructor($$.ptr);
+      }
+    }function releaseClassHandle($$) {
+      $$.count.value -= 1;
+      var toDelete = 0 === $$.count.value;
+      if (toDelete) {
+          runDestructor($$);
+      }
+    }function attachFinalizer(handle) {
+      if ('undefined' === typeof FinalizationGroup) {
+          attachFinalizer = function (handle) { return handle; };
+          return handle;
+      }
+      // If the running environment has a FinalizationGroup (see
+      // https://github.com/tc39/proposal-weakrefs), then attach finalizers
+      // for class handles.  We check for the presence of FinalizationGroup
+      // at run-time, not build-time.
+      finalizationGroup = new FinalizationGroup(function (iter) {
+          for (var result = iter.next(); !result.done; result = iter.next()) {
+              var $$ = result.value;
+              if (!$$.ptr) {
+                  console.warn('object already deleted: ' + $$.ptr);
+              } else {
+                  releaseClassHandle($$);
+              }
+          }
+      });
+      attachFinalizer = function(handle) {
+          finalizationGroup.register(handle, handle.$$, handle.$$);
+          return handle;
+      };
+      detachFinalizer = function(handle) {
+          finalizationGroup.unregister(handle.$$);
+      };
+      return attachFinalizer(handle);
     }function ClassHandle_clone() {
       if (!this.$$.ptr) {
           throwInstanceAlreadyDeleted(this);
@@ -5719,11 +5698,11 @@ function copyTempDouble(ptr) {
           this.$$.count.value += 1;
           return this;
       } else {
-          var clone = Object.create(Object.getPrototypeOf(this), {
+          var clone = attachFinalizer(Object.create(Object.getPrototypeOf(this), {
               $$: {
                   value: shallowCopyInternalPointer(this.$$),
               }
-          });
+          }));
   
           clone.$$.count.value += 1;
           clone.$$.deleteScheduled = false;
@@ -5731,15 +5710,7 @@ function copyTempDouble(ptr) {
       }
     }
   
-  
-  function runDestructor(handle) {
-      var $$ = handle.$$;
-      if ($$.smartPtr) {
-          $$.smartPtrType.rawDestructor($$.smartPtr);
-      } else {
-          $$.ptrType.registeredClass.rawDestructor($$.ptr);
-      }
-    }function ClassHandle_delete() {
+  function ClassHandle_delete() {
       if (!this.$$.ptr) {
           throwInstanceAlreadyDeleted(this);
       }
@@ -5748,11 +5719,9 @@ function copyTempDouble(ptr) {
           throwBindingError('Object already scheduled for deletion');
       }
   
-      this.$$.count.value -= 1;
-      var toDelete = 0 === this.$$.count.value;
-      if (toDelete) {
-          runDestructor(this);
-      }
+      detachFinalizer(this);
+      releaseClassHandle(this.$$);
+  
       if (!this.$$.preservePointerOnDelete) {
           this.$$.smartPtr = undefined;
           this.$$.ptr = undefined;
@@ -6075,11 +6044,11 @@ function copyTempDouble(ptr) {
           throwInternalError('Both smartPtrType and smartPtr must be specified');
       }
       record.count = { value: 1 };
-      return Object.create(prototype, {
+      return attachFinalizer(Object.create(prototype, {
           $$: {
               value: record,
           },
-      });
+      }));
     }function RegisteredPointer_fromWireType(ptr) {
       // ptr is a raw pointer (or a raw smartpointer)
   
@@ -6253,13 +6222,13 @@ function copyTempDouble(ptr) {
           // This has three main penalties:
           // - dynCall is another function call in the path from JavaScript to C++.
           // - JITs may not predict through the function table indirection at runtime.
-          var dc = Module["asm"]['dynCall_' + signature];
+          var dc = Module['dynCall_' + signature];
           if (dc === undefined) {
               // We will always enter this branch if the signature
               // contains 'f' and PRECISE_F32 is not enabled.
               //
               // Try again, replacing 'f' with 'd'.
-              dc = Module["asm"]['dynCall_' + signature.replace(/f/g, 'd')];
+              dc = Module['dynCall_' + signature.replace(/f/g, 'd')];
               if (dc === undefined) {
                   throwBindingError("No dynCall invoker for signature: " + signature);
               }
@@ -6874,53 +6843,99 @@ function copyTempDouble(ptr) {
 
   function __embind_register_std_string(rawType, name) {
       name = readLatin1String(name);
+      var stdStringIsUTF8
+      //process only std::string bindings with UTF8 support, in contrast to e.g. std::basic_string<unsigned char>
+      = (name === "std::string");
+  
       registerType(rawType, {
           name: name,
           'fromWireType': function(value) {
               var length = HEAPU32[value >> 2];
-              var a = new Array(length);
-              for (var i = 0; i < length; ++i) {
-                  a[i] = String.fromCharCode(HEAPU8[value + 4 + i]);
+  
+              var str;
+              if(stdStringIsUTF8) {
+                  //ensure null termination at one-past-end byte if not present yet
+                  var endChar = HEAPU8[value + 4 + length];
+                  var endCharSwap = 0;
+                  if(endChar != 0)
+                  {
+                    endCharSwap = endChar;
+                    HEAPU8[value + 4 + length] = 0;
+                  }
+  
+                  var decodeStartPtr = value + 4;
+                  //looping here to support possible embedded '0' bytes
+                  for (var i = 0; i <= length; ++i) {
+                    var currentBytePtr = value + 4 + i;
+                    if(HEAPU8[currentBytePtr] == 0)
+                    {
+                      var stringSegment = UTF8ToString(decodeStartPtr);
+                      if(str === undefined)
+                        str = stringSegment;
+                      else
+                      {
+                        str += String.fromCharCode(0);
+                        str += stringSegment;
+                      }
+                      decodeStartPtr = currentBytePtr + 1;
+                    }
+                  }
+  
+                  if(endCharSwap != 0)
+                    HEAPU8[value + 4 + length] = endCharSwap;
+              } else {
+                  var a = new Array(length);
+                  for (var i = 0; i < length; ++i) {
+                      a[i] = String.fromCharCode(HEAPU8[value + 4 + i]);
+                  }
+                  str = a.join('');
               }
+  
               _free(value);
-              return a.join('');
+              
+              return str;
           },
           'toWireType': function(destructors, value) {
               if (value instanceof ArrayBuffer) {
                   value = new Uint8Array(value);
               }
+              
+              var getLength;
+              var valueIsOfTypeString = (typeof value === 'string');
   
-              function getTAElement(ta, index) {
-                  return ta[index];
-              }
-              function getStringElement(string, index) {
-                  return string.charCodeAt(index);
-              }
-              var getElement;
-              if (value instanceof Uint8Array) {
-                  getElement = getTAElement;
-              } else if (value instanceof Uint8ClampedArray) {
-                  getElement = getTAElement;
-              } else if (value instanceof Int8Array) {
-                  getElement = getTAElement;
-              } else if (typeof value === 'string') {
-                  getElement = getStringElement;
-              } else {
+              if (!(valueIsOfTypeString || value instanceof Uint8Array || value instanceof Uint8ClampedArray || value instanceof Int8Array)) {
                   throwBindingError('Cannot pass non-string to std::string');
               }
-  
-              // assumes 4-byte alignment
-              var length = value.length;
-              var ptr = _malloc(4 + length);
-              HEAPU32[ptr >> 2] = length;
-              for (var i = 0; i < length; ++i) {
-                  var charCode = getElement(value, i);
-                  if (charCode > 255) {
-                      _free(ptr);
-                      throwBindingError('String has UTF-16 code units that do not fit in 8 bits');
-                  }
-                  HEAPU8[ptr + 4 + i] = charCode;
+              if (stdStringIsUTF8 && valueIsOfTypeString) {
+                  getLength = function() {return lengthBytesUTF8(value);};
+              } else {
+                  getLength = function() {return value.length;};
               }
+              
+              // assumes 4-byte alignment
+              var length = getLength();
+              var ptr = _malloc(4 + length + 1);
+              HEAPU32[ptr >> 2] = length;
+  
+              if (stdStringIsUTF8 && valueIsOfTypeString) {
+                  stringToUTF8(value, ptr + 4, length + 1);
+              } else {
+                  if(valueIsOfTypeString) {
+                      for (var i = 0; i < length; ++i) {
+                          var charCode = value.charCodeAt(i);
+                          if (charCode > 255) {
+                              _free(ptr);
+                              throwBindingError('String has UTF-16 code units that do not fit in 8 bits');
+                          }
+                          HEAPU8[ptr + 4 + i] = charCode;
+                      }
+                  } else {
+                      for (var i = 0; i < length; ++i) {
+                          HEAPU8[ptr + 4 + i] = value[i];
+                      }
+                  }
+              }
+  
               if (destructors !== null) {
                   destructors.push(_free, ptr);
               }
@@ -6933,7 +6948,7 @@ function copyTempDouble(ptr) {
     }
 
   function __embind_register_std_wstring(rawType, charSize, name) {
-      // nb. do not cache HEAPU16 and HEAPU32, they may be destroyed by enlargeMemory().
+      // nb. do not cache HEAPU16 and HEAPU32, they may be destroyed by emscripten_resize_heap().
       name = readLatin1String(name);
       var getHeap, shift;
       if (charSize === 2) {
@@ -7082,7 +7097,14 @@ function copyTempDouble(ptr) {
       }
     }
   
-  function emval_get_global() { return (function(){return Function;})()('return this')(); }function __emval_get_global(name) {
+  function emval_get_global() {
+      if (typeof globalThis === 'object') {
+        return globalThis;
+      }
+      return (function(){
+        return Function;
+      })()('return this')();
+    }function __emval_get_global(name) {
       if(name===0){
         return __emval_register(emval_get_global());
       } else {
@@ -7107,11 +7129,15 @@ function copyTempDouble(ptr) {
       Module['abort']();
     }
 
+  function _emscripten_get_heap_size() {
+      return HEAP8.length;
+    }
+
   function _getenv(name) {
       // char *getenv(const char *name);
       // http://pubs.opengroup.org/onlinepubs/009695399/functions/getenv.html
       if (name === 0) return 0;
-      name = Pointer_stringify(name);
+      name = UTF8ToString(name);
       if (!ENV.hasOwnProperty(name)) return 0;
   
       if (_getenv.ret) _free(_getenv.ret);
@@ -7136,10 +7162,6 @@ function copyTempDouble(ptr) {
       return ((setTempRet0(reth),retl)|0);
     }
 
-  var _llvm_ceil_f32=Math_ceil;
-
-  var _llvm_ctlz_i32=true;
-
   function _llvm_stackrestore(p) {
       var self = _llvm_stacksave;
       var ret = self.LLVM_SAVEDSTACKS[p];
@@ -7156,19 +7178,26 @@ function copyTempDouble(ptr) {
       return self.LLVM_SAVEDSTACKS.length-1;
     }
 
+  function _llvm_trap() {
+      abort('trap!');
+    }
+
+  
+   
   
    
   
    function _longjmp(env, value) {
-      Module['setThrew'](env, value || 1);
+      _setThrew(env, value || 1);
       throw 'longjmp';
     }
 
   
   function _emscripten_memcpy_big(dest, src, num) {
       HEAPU8.set(HEAPU8.subarray(src, src+num), dest);
-      return dest;
-    } 
+    }
+  
+   
 
    
 
@@ -7178,50 +7207,88 @@ function copyTempDouble(ptr) {
 
   function _pthread_cond_wait() { return 0; }
 
-  
-  var PTHREAD_SPECIFIC={};function _pthread_getspecific(key) {
-      return PTHREAD_SPECIFIC[key] || 0;
-    }
-
-  
-  var PTHREAD_SPECIFIC_NEXT_KEY=1;function _pthread_key_create(key, destructor) {
-      if (key == 0) {
-        return ERRNO_CODES.EINVAL;
-      }
-      HEAP32[((key)>>2)]=PTHREAD_SPECIFIC_NEXT_KEY;
-      // values start at 0
-      PTHREAD_SPECIFIC[PTHREAD_SPECIFIC_NEXT_KEY] = 0;
-      PTHREAD_SPECIFIC_NEXT_KEY++;
-      return 0;
-    }
-
-   
-
-   
-
-  function _pthread_once(ptr, func) {
-      if (!_pthread_once.seen) _pthread_once.seen = {};
-      if (ptr in _pthread_once.seen) return;
-      Module['dynCall_v'](func);
-      _pthread_once.seen[ptr] = 1;
-    }
-
   function _pthread_rwlock_rdlock() { return 0; }
 
   function _pthread_rwlock_unlock() { return 0; }
 
   function _pthread_rwlock_wrlock() { return 0; }
 
-  function _pthread_setspecific(key, value) {
-      if (!(key in PTHREAD_SPECIFIC)) {
-        return ERRNO_CODES.EINVAL;
-      }
-      PTHREAD_SPECIFIC[key] = value;
-      return 0;
+
+  
+  
+  function abortOnCannotGrowMemory(requestedSize) {
+      abort('Cannot enlarge memory arrays to size ' + requestedSize + ' bytes (OOM). Either (1) compile with  -s TOTAL_MEMORY=X  with X higher than the current value ' + HEAP8.length + ', (2) compile with  -s ALLOW_MEMORY_GROWTH=1  which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with  -s ABORTING_MALLOC=0 ');
     }
-
-
-   
+  
+  function emscripten_realloc_buffer(size) {
+      var PAGE_MULTIPLE = 65536;
+      size = alignUp(size, PAGE_MULTIPLE); // round up to wasm page size
+      var oldSize = buffer.byteLength;
+      // native wasm support
+      // note that this is *not* threadsafe. multiple threads can call .grow(), and each
+      // presents a delta, so in theory we may over-allocate here (e.g. if two threads
+      // ask to grow from 256MB to 512MB, we get 2 requests to add +256MB, and may end
+      // up growing to 768MB (even though we may have been able to make do with 512MB).
+      // TODO: consider decreasing the step sizes in emscripten_resize_heap
+      try {
+        var result = wasmMemory.grow((size - oldSize) / 65536); // .grow() takes a delta compared to the previous size
+        if (result !== (-1 | 0)) {
+          // success in native wasm memory growth, get the buffer from the memory
+          buffer = wasmMemory.buffer;
+          return true;
+        } else {
+          return false;
+        }
+      } catch(e) {
+        console.error('emscripten_realloc_buffer: Attempted to grow from ' + oldSize  + ' bytes to ' + size + ' bytes, but got error: ' + e);
+        return false;
+      }
+    }function _emscripten_resize_heap(requestedSize) {
+      var oldSize = _emscripten_get_heap_size();
+      // With pthreads, races can happen (another thread might increase the size in between), so return a failure, and let the caller retry.
+      assert(requestedSize > oldSize);
+  
+  
+      var PAGE_MULTIPLE = 65536;
+      var LIMIT = 2147483648 - PAGE_MULTIPLE; // We can do one page short of 2GB as theoretical maximum.
+  
+      if (requestedSize > LIMIT) {
+        err('Cannot enlarge memory, asked to go up to ' + requestedSize + ' bytes, but the limit is ' + LIMIT + ' bytes!');
+        return false;
+      }
+  
+      var MIN_TOTAL_MEMORY = 16777216;
+      var newSize = Math.max(oldSize, MIN_TOTAL_MEMORY); // So the loop below will not be infinite, and minimum asm.js memory size is 16MB.
+  
+      // TODO: see realloc_buffer - for PTHREADS we may want to decrease these jumps
+      while (newSize < requestedSize) { // Keep incrementing the heap size as long as it's less than what is requested.
+        if (newSize <= 536870912) {
+          newSize = alignUp(2 * newSize, PAGE_MULTIPLE); // Simple heuristic: double until 1GB...
+        } else {
+          // ..., but after that, add smaller increments towards 2GB, which we cannot reach
+          newSize = Math.min(alignUp((3 * newSize + 2147483648) / 4, PAGE_MULTIPLE), LIMIT);
+        }
+  
+        if (newSize === oldSize) {
+          warnOnce('Cannot ask for more memory since we reached the practical limit in browsers (which is just below 2GB), so the request would have failed. Requesting only ' + HEAP8.length);
+        }
+      }
+  
+  
+  
+      var start = Date.now();
+  
+      if (!emscripten_realloc_buffer(newSize)) {
+        err('Failed to grow the heap from ' + oldSize + ' bytes to ' + newSize + ' bytes, not enough memory!');
+        return false;
+      }
+  
+      updateGlobalBufferViews();
+  
+  
+  
+      return true;
+    } 
 
   
   
@@ -7256,7 +7323,7 @@ function copyTempDouble(ptr) {
             newDate.setFullYear(newDate.getFullYear()+1);
           }
         } else {
-          // we stay in current month 
+          // we stay in current month
           newDate.setDate(newDate.getDate()+days);
           return newDate;
         }
@@ -7280,10 +7347,10 @@ function copyTempDouble(ptr) {
         tm_yday: HEAP32[(((tm)+(28))>>2)],
         tm_isdst: HEAP32[(((tm)+(32))>>2)],
         tm_gmtoff: HEAP32[(((tm)+(36))>>2)],
-        tm_zone: tm_zone ? Pointer_stringify(tm_zone) : ''
+        tm_zone: tm_zone ? UTF8ToString(tm_zone) : ''
       };
   
-      var pattern = Pointer_stringify(format);
+      var pattern = UTF8ToString(format);
   
       // expand format
       var EXPANSION_RULES_1 = {
@@ -7295,7 +7362,27 @@ function copyTempDouble(ptr) {
         '%R': '%H:%M',                    // Replaced by the time in 24-hour notation
         '%T': '%H:%M:%S',                 // Replaced by the time
         '%x': '%m/%d/%y',                 // Replaced by the locale's appropriate date representation
-        '%X': '%H:%M:%S'                  // Replaced by the locale's appropriate date representation
+        '%X': '%H:%M:%S',                 // Replaced by the locale's appropriate time representation
+        // Modified Conversion Specifiers
+        '%Ec': '%c',                      // Replaced by the locale's alternative appropriate date and time representation.
+        '%EC': '%C',                      // Replaced by the name of the base year (period) in the locale's alternative representation.
+        '%Ex': '%m/%d/%y',                // Replaced by the locale's alternative date representation.
+        '%EX': '%H:%M:%S',                // Replaced by the locale's alternative time representation.
+        '%Ey': '%y',                      // Replaced by the offset from %EC (year only) in the locale's alternative representation.
+        '%EY': '%Y',                      // Replaced by the full alternative year representation.
+        '%Od': '%d',                      // Replaced by the day of the month, using the locale's alternative numeric symbols, filled as needed with leading zeros if there is any alternative symbol for zero; otherwise, with leading <space> characters.
+        '%Oe': '%e',                      // Replaced by the day of the month, using the locale's alternative numeric symbols, filled as needed with leading <space> characters.
+        '%OH': '%H',                      // Replaced by the hour (24-hour clock) using the locale's alternative numeric symbols.
+        '%OI': '%I',                      // Replaced by the hour (12-hour clock) using the locale's alternative numeric symbols.
+        '%Om': '%m',                      // Replaced by the month using the locale's alternative numeric symbols.
+        '%OM': '%M',                      // Replaced by the minutes using the locale's alternative numeric symbols.
+        '%OS': '%S',                      // Replaced by the seconds using the locale's alternative numeric symbols.
+        '%Ou': '%u',                      // Replaced by the weekday as a number in the locale's alternative representation (Monday=1).
+        '%OU': '%U',                      // Replaced by the week number of the year (Sunday as the first day of the week, rules corresponding to %U ) using the locale's alternative numeric symbols.
+        '%OV': '%V',                      // Replaced by the week number of the year (Monday as the first day of the week, rules corresponding to %V ) using the locale's alternative numeric symbols.
+        '%Ow': '%w',                      // Replaced by the number of the weekday (Sunday=0) using the locale's alternative numeric symbols.
+        '%OW': '%W',                      // Replaced by the week number of the year (Monday as the first day of the week) using the locale's alternative numeric symbols.
+        '%Oy': '%y',                      // Replaced by the year (offset from %C ) using the locale's alternative numeric symbols.
       };
       for (var rule in EXPANSION_RULES_1) {
         pattern = pattern.replace(new RegExp(rule, 'g'), EXPANSION_RULES_1[rule]);
@@ -7310,16 +7397,16 @@ function copyTempDouble(ptr) {
           str = character[0]+str;
         }
         return str;
-      };
+      }
   
       function leadingNulls(value, digits) {
         return leadingSomething(value, digits, '0');
-      };
+      }
   
       function compareByDay(date1, date2) {
         function sgn(value) {
           return value < 0 ? -1 : (value > 0 ? 1 : 0);
-        };
+        }
   
         var compare;
         if ((compare = sgn(date1.getFullYear()-date2.getFullYear())) === 0) {
@@ -7328,7 +7415,7 @@ function copyTempDouble(ptr) {
           }
         }
         return compare;
-      };
+      }
   
       function getFirstWeekStartDate(janFourth) {
           switch (janFourth.getDay()) {
@@ -7347,7 +7434,7 @@ function copyTempDouble(ptr) {
             case 6: // Saturday
               return new Date(janFourth.getFullYear()-1, 11, 30);
           }
-      };
+      }
   
       function getWeekBasedYear(date) {
           var thisDate = __addDays(new Date(date.tm_year+1900, 0, 1), date.tm_yday);
@@ -7365,10 +7452,10 @@ function copyTempDouble(ptr) {
             } else {
               return thisDate.getFullYear();
             }
-          } else { 
+          } else {
             return thisDate.getFullYear()-1;
           }
-      };
+      }
   
       var EXPANSION_RULES_2 = {
         '%a': function(date) {
@@ -7394,16 +7481,16 @@ function copyTempDouble(ptr) {
           return leadingSomething(date.tm_mday, 2, ' ');
         },
         '%g': function(date) {
-          // %g, %G, and %V give values according to the ISO 8601:2000 standard week-based year. 
-          // In this system, weeks begin on a Monday and week 1 of the year is the week that includes 
-          // January 4th, which is also the week that includes the first Thursday of the year, and 
-          // is also the first week that contains at least four days in the year. 
-          // If the first Monday of January is the 2nd, 3rd, or 4th, the preceding days are part of 
-          // the last week of the preceding year; thus, for Saturday 2nd January 1999, 
-          // %G is replaced by 1998 and %V is replaced by 53. If December 29th, 30th, 
-          // or 31st is a Monday, it and any following days are part of week 1 of the following year. 
+          // %g, %G, and %V give values according to the ISO 8601:2000 standard week-based year.
+          // In this system, weeks begin on a Monday and week 1 of the year is the week that includes
+          // January 4th, which is also the week that includes the first Thursday of the year, and
+          // is also the first week that contains at least four days in the year.
+          // If the first Monday of January is the 2nd, 3rd, or 4th, the preceding days are part of
+          // the last week of the preceding year; thus, for Saturday 2nd January 1999,
+          // %G is replaced by 1998 and %V is replaced by 53. If December 29th, 30th,
+          // or 31st is a Monday, it and any following days are part of week 1 of the following year.
           // Thus, for Tuesday 30th December 1997, %G is replaced by 1998 and %V is replaced by 01.
-          
+  
           return getWeekBasedYear(date).toString().substring(2);
         },
         '%G': function(date) {
@@ -7445,17 +7532,16 @@ function copyTempDouble(ptr) {
           return '\t';
         },
         '%u': function(date) {
-          var day = new Date(date.tm_year+1900, date.tm_mon+1, date.tm_mday, 0, 0, 0, 0);
-          return day.getDay() || 7;
+          return date.tm_wday || 7;
         },
         '%U': function(date) {
-          // Replaced by the week number of the year as a decimal number [00,53]. 
-          // The first Sunday of January is the first day of week 1; 
+          // Replaced by the week number of the year as a decimal number [00,53].
+          // The first Sunday of January is the first day of week 1;
           // days in the new year before this are in week 0. [ tm_year, tm_wday, tm_yday]
           var janFirst = new Date(date.tm_year+1900, 0, 1);
           var firstSunday = janFirst.getDay() === 0 ? janFirst : __addDays(janFirst, 7-janFirst.getDay());
           var endDate = new Date(date.tm_year+1900, date.tm_mon, date.tm_mday);
-          
+  
           // is target date after the first Sunday?
           if (compareByDay(firstSunday, endDate) < 0) {
             // calculate difference in days between first Sunday and endDate
@@ -7468,10 +7554,10 @@ function copyTempDouble(ptr) {
           return compareByDay(firstSunday, janFirst) === 0 ? '01': '00';
         },
         '%V': function(date) {
-          // Replaced by the week number of the year (Monday as the first day of the week) 
-          // as a decimal number [01,53]. If the week containing 1 January has four 
-          // or more days in the new year, then it is considered week 1. 
-          // Otherwise, it is the last week of the previous year, and the next week is week 1. 
+          // Replaced by the week number of the year (Monday as the first day of the week)
+          // as a decimal number [01,53]. If the week containing 1 January has four
+          // or more days in the new year, then it is considered week 1.
+          // Otherwise, it is the last week of the previous year, and the next week is week 1.
           // Both January 4th and the first Thursday of January are always in week 1. [ tm_year, tm_wday, tm_yday]
           var janFourthThisYear = new Date(date.tm_year+1900, 0, 4);
           var janFourthNextYear = new Date(date.tm_year+1901, 0, 4);
@@ -7484,7 +7570,7 @@ function copyTempDouble(ptr) {
           if (compareByDay(endDate, firstWeekStartThisYear) < 0) {
             // if given date is before this years first week, then it belongs to the 53rd week of last year
             return '53';
-          } 
+          }
   
           if (compareByDay(firstWeekStartNextYear, endDate) <= 0) {
             // if given date is after next years first week, then it belongs to the 01th week of next year
@@ -7503,12 +7589,11 @@ function copyTempDouble(ptr) {
           return leadingNulls(Math.ceil(daysDifference/7), 2);
         },
         '%w': function(date) {
-          var day = new Date(date.tm_year+1900, date.tm_mon+1, date.tm_mday, 0, 0, 0, 0);
-          return day.getDay();
+          return date.tm_wday;
         },
         '%W': function(date) {
-          // Replaced by the week number of the year as a decimal number [00,53]. 
-          // The first Monday of January is the first day of week 1; 
+          // Replaced by the week number of the year as a decimal number [00,53].
+          // The first Monday of January is the first day of week 1;
           // days in the new year before this are in week 0. [ tm_year, tm_wday, tm_yday]
           var janFirst = new Date(date.tm_year, 0, 1);
           var firstMonday = janFirst.getDay() === 1 ? janFirst : __addDays(janFirst, janFirst.getDay() === 0 ? 1 : 7-janFirst.getDay()+1);
@@ -7557,7 +7642,7 @@ function copyTempDouble(ptr) {
       var bytes = intArrayFromString(pattern, false);
       if (bytes.length > maxsize) {
         return 0;
-      } 
+      }
   
       writeArrayToMemory(bytes, s);
       return bytes.length-1;
@@ -7565,9 +7650,8 @@ function copyTempDouble(ptr) {
       return _strftime(s, maxsize, format, tm); // no locale support yet
     }
 
-FS.staticInit();__ATINIT__.unshift(function() { if (!Module["noFSInit"] && !FS.init.initialized) FS.init() });__ATMAIN__.push(function() { FS.ignorePermissions = false });__ATEXIT__.push(function() { FS.quit() });;
-__ATINIT__.unshift(function() { TTY.init() });__ATEXIT__.push(function() { TTY.shutdown() });;
-if (ENVIRONMENT_IS_NODE) { var fs = require("fs"); var NODEJS_PATH = require("path"); NODEFS.staticInit(); };
+FS.staticInit();;
+if (ENVIRONMENT_HAS_NODE) { var fs = require("fs"); var NODEJS_PATH = require("path"); NODEFS.staticInit(); };
 InternalError = Module['InternalError'] = extendError(Error, 'InternalError');;
 embind_init_charCodes();
 BindingError = Module['BindingError'] = extendError(Error, 'BindingError');;
@@ -7576,21 +7660,12 @@ init_RegisteredPointer();
 init_embind();;
 UnboundTypeError = Module['UnboundTypeError'] = extendError(Error, 'UnboundTypeError');;
 init_emval();;
-DYNAMICTOP_PTR = staticAlloc(4);
-
-STACK_BASE = STACKTOP = alignMemory(STATICTOP);
-
-STACK_MAX = STACK_BASE + TOTAL_STACK;
-
-DYNAMIC_BASE = alignMemory(STACK_MAX);
-
-HEAP32[DYNAMICTOP_PTR>>2] = DYNAMIC_BASE;
-
-staticSealed = true; // seal the static portion of memory
-
-assert(DYNAMIC_BASE < TOTAL_MEMORY, "TOTAL_MEMORY not big enough for stack");
-
 var ASSERTIONS = true;
+
+// Copyright 2017 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
 
 /** @type {function(string, boolean=, number=)} */
 function intArrayFromString(stringy, dontAddNull, length) {
@@ -7617,904 +7692,620 @@ function intArrayToString(array) {
 }
 
 
+// ASM_LIBRARY EXTERN PRIMITIVES: Int8Array,Int32Array
 
-var debug_table_diii = ["0", "__ZNSt3__215__num_get_floatIeEET_PKcS3_Rj", "__ZNSt3__215__num_get_floatIdEET_PKcS3_Rj", "0"];
-var debug_table_fiii = ["0", "__ZNSt3__215__num_get_floatIfEET_PKcS3_Rj"];
-var debug_table_i = ["0", "__ZN6tpm_js9Simulator11IsPoweredOnEv", "__ZN6tpm_js9Simulator9IsStartedEv", "__ZN6tpm_js9Simulator14IsManufacturedEv", "__ZN6tpm_js9Simulator14GetBootCounterEv", "__ZN6tpm_js3App3GetEv", "__ZN10emscripten8internal6TypeIDIN6tpm_js13TpmPropertiesEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js13TpmPropertiesEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js19CreatePrimaryResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js19CreatePrimaryResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js12CreateResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js12CreateResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js10LoadResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js10LoadResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js10SignResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js10SignResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js18NvReadPublicResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js18NvReadPublicResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js12NvReadResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js12NvReadResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js11QuoteResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js11QuoteResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js10AttestInfoEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js10AttestInfoEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js12UnsealResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js12UnsealResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal6TypeIDIN6tpm_js22StartAuthSessionResultEE3getEv", "__ZN10emscripten8internal15raw_constructorIN6tpm_js22StartAuthSessionResultEJEEEPT_DpNS0_11BindingTypeIT0_E8WireTypeE", "__ZN10emscripten8internal12operator_newINSt3__26vectorIhNS2_9allocatorIhEEEEJEEEPT_DpOT0_", "__ZNSt3__26__clocEv", "__ZNSt3__26locale5__imp12make_classicEv", "__ZNSt3__26locale5__imp11make_globalEv", "__ZNSt3__26locale8__globalEv", "___cxa_get_globals_fast", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_ii = ["0", "__ZNKSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_E7__cloneEv", "__ZNKSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_E11target_typeEv", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE4syncEv", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE9showmanycEv", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE9underflowEv", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE5uflowEv", "_SHA1_Init", "_SHA256_Init", "_SHA384_Init", "_TPM2_Startup", "_TPM2_Shutdown", "_TPM2_SelfTest", "_TPM2_GetTestResult", "_TPM2_PolicyRestart", "_TPM2_StirRandom", "_TPM2_SequenceUpdate", "_TPM2_SetCommandCodeAuditStatus", "_TPM2_PCR_Extend", "_TPM2_PCR_SetAuthPolicy", "_TPM2_PCR_SetAuthValue", "_TPM2_PCR_Reset", "_TPM2_PolicyTicket", "_TPM2_PolicyOR", "_TPM2_PolicyPCR", "_TPM2_PolicyLocality", "_TPM2_PolicyNV", "_TPM2_PolicyCounterTimer", "_TPM2_PolicyCommandCode", "_TPM2_PolicyPhysicalPresence", "_TPM2_PolicyCpHash", "_TPM2_PolicyNameHash", "_TPM2_PolicyDuplicationSelect", "_TPM2_PolicyAuthorize", "_TPM2_PolicyAuthValue", "_TPM2_PolicyPassword", "_TPM2_PolicyNvWritten", "_TPM2_PolicyTemplate", "_TPM2_PolicyAuthorizeNV", "_TPM2_HierarchyControl", "_TPM2_SetPrimaryPolicy", "_TPM2_ChangePPS", "_TPM2_ChangeEPS", "_TPM2_Clear", "_TPM2_ClearControl", "_TPM2_HierarchyChangeAuth", "_TPM2_DictionaryAttackLockReset", "_TPM2_DictionaryAttackParameters", "_TPM2_PP_Commands", "_TPM2_SetAlgorithmSet", "_TPM2_FlushContext", "_TPM2_EvictControl", "_TPM2_ReadClock", "_TPM2_ClockSet", "_TPM2_ClockRateAdjust", "_TPM2_TestParms", "_TPM2_NV_DefineSpace", "_TPM2_NV_UndefineSpace", "_TPM2_NV_UndefineSpaceSpecial", "_TPM2_NV_Write", "_TPM2_NV_Increment", "_TPM2_NV_Extend", "_TPM2_NV_SetBits", "_TPM2_NV_WriteLock", "_TPM2_NV_GlobalWriteLock", "_TPM2_NV_ReadLock", "_TPM2_NV_ChangeAuth", "___stdio_close", "__ZNKSt3__217bad_function_call4whatEv", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE9underflowEv", "__ZNKSt3__219__iostream_category4nameEv", "__ZNKSt13runtime_error4whatEv", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE13do_date_orderEv", "__ZNKSt3__220__time_get_c_storageIcE7__weeksEv", "__ZNKSt3__220__time_get_c_storageIcE8__monthsEv", "__ZNKSt3__220__time_get_c_storageIcE7__am_pmEv", "__ZNKSt3__220__time_get_c_storageIcE3__cEv", "__ZNKSt3__220__time_get_c_storageIcE3__rEv", "__ZNKSt3__220__time_get_c_storageIcE3__xEv", "__ZNKSt3__220__time_get_c_storageIcE3__XEv", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE13do_date_orderEv", "__ZNKSt3__220__time_get_c_storageIwE7__weeksEv", "__ZNKSt3__220__time_get_c_storageIwE8__monthsEv", "__ZNKSt3__220__time_get_c_storageIwE7__am_pmEv", "__ZNKSt3__220__time_get_c_storageIwE3__cEv", "__ZNKSt3__220__time_get_c_storageIwE3__rEv", "__ZNKSt3__220__time_get_c_storageIwE3__xEv", "__ZNKSt3__220__time_get_c_storageIwE3__XEv", "__ZNKSt3__210moneypunctIcLb0EE16do_decimal_pointEv", "__ZNKSt3__210moneypunctIcLb0EE16do_thousands_sepEv", "__ZNKSt3__210moneypunctIcLb0EE14do_frac_digitsEv", "__ZNKSt3__210moneypunctIcLb1EE16do_decimal_pointEv", "__ZNKSt3__210moneypunctIcLb1EE16do_thousands_sepEv", "__ZNKSt3__210moneypunctIcLb1EE14do_frac_digitsEv", "__ZNKSt3__210moneypunctIwLb0EE16do_decimal_pointEv", "__ZNKSt3__210moneypunctIwLb0EE16do_thousands_sepEv", "__ZNKSt3__210moneypunctIwLb0EE14do_frac_digitsEv", "__ZNKSt3__210moneypunctIwLb1EE16do_decimal_pointEv", "__ZNKSt3__210moneypunctIwLb1EE16do_thousands_sepEv", "__ZNKSt3__210moneypunctIwLb1EE14do_frac_digitsEv", "__ZNKSt3__27codecvtIDic11__mbstate_tE11do_encodingEv", "__ZNKSt3__27codecvtIDic11__mbstate_tE16do_always_noconvEv", "__ZNKSt3__27codecvtIDic11__mbstate_tE13do_max_lengthEv", "__ZNKSt3__27codecvtIwc11__mbstate_tE11do_encodingEv", "__ZNKSt3__27codecvtIwc11__mbstate_tE16do_always_noconvEv", "__ZNKSt3__27codecvtIwc11__mbstate_tE13do_max_lengthEv", "__ZNKSt3__28numpunctIcE16do_decimal_pointEv", "__ZNKSt3__28numpunctIcE16do_thousands_sepEv", "__ZNKSt3__28numpunctIwE16do_decimal_pointEv", "__ZNKSt3__28numpunctIwE16do_thousands_sepEv", "__ZNKSt3__27codecvtIcc11__mbstate_tE11do_encodingEv", "__ZNKSt3__27codecvtIcc11__mbstate_tE16do_always_noconvEv", "__ZNKSt3__27codecvtIcc11__mbstate_tE13do_max_lengthEv", "__ZNKSt3__27codecvtIDsc11__mbstate_tE11do_encodingEv", "__ZNKSt3__27codecvtIDsc11__mbstate_tE16do_always_noconvEv", "__ZNKSt3__27codecvtIDsc11__mbstate_tE13do_max_lengthEv", "__ZNKSt9bad_alloc4whatEv", "__ZNKSt11logic_error4whatEv", "__ZNKSt8bad_cast4whatEv", "__ZN10emscripten8internal13getActualTypeIN6tpm_js3AppEEEPKvPT_", "__ZN10emscripten8internal7InvokerIPN6tpm_js3AppEJEE6invokeEPFS4_vE", "__ZN6tpm_js3App7StartupEv", "__ZN6tpm_js3App8ShutdownEv", "__ZN6tpm_js3App5ClearEv", "__ZN6tpm_js3App8SelfTestEv", "__ZN6tpm_js3App25DictionaryAttackLockResetEv", "__ZN10emscripten8internal7InvokerIiJEE6invokeEPFivE", "__ZN10emscripten8internal7InvokerINSt3__26vectorIhNS2_9allocatorIhEEEEJEE6invokeEPFS6_vE", "__ZN10emscripten8internal13getActualTypeINSt3__26vectorIhNS2_9allocatorIhEEEEEEPKvPT_", "__ZN10emscripten8internal7InvokerIPNSt3__26vectorIhNS2_9allocatorIhEEEEJEE6invokeEPFS7_vE", "__ZNKSt3__26vectorIhNS_9allocatorIhEEE4sizeEv", "__ZN10emscripten8internal18GenericBindingTypeINSt3__26vectorIhNS2_9allocatorIhEEEEE10toWireTypeEOS6_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js13TpmPropertiesEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js19CreatePrimaryResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js12CreateResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js10LoadResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js10SignResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js12NvReadResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js11QuoteResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js10AttestInfoEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js12UnsealResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal18GenericBindingTypeIN6tpm_js22StartAuthSessionResultEE10toWireTypeEOS3_", "__ZN10emscripten8internal11BindingTypeINS_3valEE10toWireTypeERKS2_", "__Znwj", "__ZN6tpm_js12_GLOBAL__N_123sapi_init_from_tcti_ctxEP29TSS2_TCTI_OPAQUE_CONTEXT_BLOB", "__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEE5flushEv", "_ec_GFp_mont_group_init", "_pthread_mutex_unlock", "_pthread_mutex_lock", "_pthread_cond_broadcast", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_iii = ["0", "__ZNKSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_E6targetERKSt9type_info", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE9pbackfailEi", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE8overflowEi", "_SHA1_Final", "_SHA256_Final", "_SHA384_Final", "_TPM2_IncrementalSelfTest", "_TPM2_StartAuthSession", "_TPM2_Create", "_TPM2_Load", "_TPM2_LoadExternal", "_TPM2_ReadPublic", "_TPM2_ActivateCredential", "_TPM2_MakeCredential", "_TPM2_Unseal", "_TPM2_ObjectChangeAuth", "_TPM2_CreateLoaded", "_TPM2_Duplicate", "_TPM2_Rewrap", "_TPM2_Import", "_TPM2_RSA_Encrypt", "_TPM2_RSA_Decrypt", "_TPM2_ECDH_KeyGen", "_TPM2_ECDH_ZGen", "_TPM2_ECC_Parameters", "_TPM2_ZGen_2Phase", "_TPM2_EncryptDecrypt", "_TPM2_EncryptDecrypt2", "_TPM2_Hash", "_TPM2_HMAC", "_TPM2_GetRandom", "_TPM2_HMAC_Start", "_TPM2_HashSequenceStart", "_TPM2_SequenceComplete", "_TPM2_EventSequenceComplete", "_TPM2_Certify", "_TPM2_CertifyCreation", "_TPM2_Quote", "_TPM2_GetSessionAuditDigest", "_TPM2_GetCommandAuditDigest", "_TPM2_GetTime", "_TPM2_Commit", "_TPM2_EC_Ephemeral", "_TPM2_VerifySignature", "_TPM2_Sign", "_TPM2_PCR_Event", "_TPM2_PCR_Read", "_TPM2_PCR_Allocate", "_TPM2_PolicySigned", "_TPM2_PolicySecret", "_TPM2_PolicyGetDigest", "_TPM2_CreatePrimary", "_TPM2_ContextSave", "_TPM2_ContextLoad", "_TPM2_GetCapability", "_TPM2_NV_ReadPublic", "_TPM2_NV_Read", "_TPM2_NV_Certify", "_TPM2_Vendor_TCG_Test", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE9pbackfailEi", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE8overflowEi", "__ZNKSt3__25ctypeIcE10do_toupperEc", "__ZNKSt3__25ctypeIcE10do_tolowerEc", "__ZNKSt3__25ctypeIcE8do_widenEc", "__ZNKSt3__25ctypeIwE10do_toupperEw", "__ZNKSt3__25ctypeIwE10do_tolowerEw", "__ZNKSt3__25ctypeIwE8do_widenEc", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFivEiPS3_JEE6invokeERKS5_S6_", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_13TpmPropertiesEvES4_PS3_JEE6invokeERKS6_S7_", "__ZN6tpm_js3App13TestHashParamEi", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_19CreatePrimaryResultEvES4_PS3_JEE6invokeERKS6_S7_", "__ZN6tpm_js3App12FlushContextEj", "__ZN6tpm_js3App14PolicyPasswordEj", "__ZN10emscripten8internal7InvokerINSt3__26vectorIhNS2_9allocatorIhEEEEJiEE6invokeEPFS6_iEi", "__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesENSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEE7getWireIS3_EEPNS0_11BindingTypeISA_EUt_ERKMS3_SA_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEjE7getWireIS3_EEjRKMS3_jRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEjE7getWireIS3_EEjRKMS3_jRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js18NvReadPublicResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEjE7getWireIS3_EEjRKMS3_jRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEiE7getWireIS3_EEiRKMS3_iRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEjE7getWireIS3_EEjRKMS3_jRKT_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_", "__ZN10emscripten8internal13MethodInvokerIMNSt3__26vectorIhNS2_9allocatorIhEEEEKFjvEjPKS6_JEE6invokeERKS8_SA_", "__ZNSt3__2lsINS_11char_traitsIcEEEERNS_13basic_ostreamIcT_EES6_PKc", "__ZNSt3__2lsINS_11char_traitsIcEEEERNS_13basic_ostreamIcT_EES6_PKh", "__ZNKSt3__26locale9use_facetERNS0_2idE", "__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEE3putEc", "__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEElsEj", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6appendEPKc", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_iiii = ["0", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE6setbufEPci", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE6xsgetnEPci", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE6xsputnEPKci", "_SHA1_Update", "_memcpy", "_SHA256_Update", "_SHA384_Update", "_TPMI_DH_CONTEXT_Unmarshal", "_TPMI_RH_CLEAR_Unmarshal", "_TPMI_RH_HIERARCHY_AUTH_Unmarshal", "_TPMI_RH_LOCKOUT_Unmarshal", "_TPMI_RH_NV_AUTH_Unmarshal", "_TPMI_RH_NV_INDEX_Unmarshal", "_TPMI_RH_PLATFORM_Unmarshal", "_TPMI_RH_PROVISION_Unmarshal", "_TPMI_SH_HMAC_Unmarshal", "_TPMI_SH_POLICY_Unmarshal", "_UINT32_Unmarshal", "_TPM2B_DIGEST_Unmarshal", "_TPM2B_DATA_Unmarshal", "_TPM2B_ECC_PARAMETER_Unmarshal", "_TPM2B_ECC_POINT_Unmarshal", "_TPM2B_ENCRYPTED_SECRET_Unmarshal", "_TPM2B_EVENT_Unmarshal", "_TPM2B_ID_OBJECT_Unmarshal", "_TPM2B_IV_Unmarshal", "_TPM2B_MAX_BUFFER_Unmarshal", "_TPM2B_MAX_NV_BUFFER_Unmarshal", "_TPM2B_NAME_Unmarshal", "_TPM2B_NV_PUBLIC_Unmarshal", "_TPM2B_PRIVATE_Unmarshal", "_TPM2B_PUBLIC_KEY_RSA_Unmarshal", "_TPM2B_SENSITIVE_Unmarshal", "_TPM2B_SENSITIVE_CREATE_Unmarshal", "_TPM2B_SENSITIVE_DATA_Unmarshal", "_TPM2B_TEMPLATE_Unmarshal", "_TPM2B_TIMEOUT_Unmarshal", "_UINT8_Unmarshal", "_TPMI_DH_PERSISTENT_Unmarshal", "_TPMI_ECC_CURVE_Unmarshal", "_TPMI_YES_NO_Unmarshal", "_TPML_ALG_Unmarshal", "_TPML_CC_Unmarshal", "_TPML_DIGEST_Unmarshal", "_TPML_DIGEST_VALUES_Unmarshal", "_TPML_PCR_SELECTION_Unmarshal", "_TPMS_CONTEXT_Unmarshal", "_TPMT_PUBLIC_PARMS_Unmarshal", "_TPMT_TK_AUTH_Unmarshal", "_TPMT_TK_CREATION_Unmarshal", "_TPMT_TK_HASHCHECK_Unmarshal", "_TPMT_TK_VERIFIED_Unmarshal", "_TPM_CAP_Unmarshal", "_TPM_CLOCK_ADJUST_Unmarshal", "_TPM_EO_Unmarshal", "_TPM_SE_Unmarshal", "_TPM_SU_Unmarshal", "_UINT16_Unmarshal", "_UINT64_Unmarshal", "_UINT32_Marshal", "_TPM2B_ATTEST_Marshal", "_TPM2B_CREATION_DATA_Marshal", "_TPM2B_DATA_Marshal", "_TPM2B_DIGEST_Marshal", "_TPM2B_ECC_POINT_Marshal", "_TPM2B_ENCRYPTED_SECRET_Marshal", "_TPM2B_ID_OBJECT_Marshal", "_TPM2B_IV_Marshal", "_TPM2B_MAX_BUFFER_Marshal", "_TPM2B_MAX_NV_BUFFER_Marshal", "_TPM2B_NAME_Marshal", "_TPM2B_NV_PUBLIC_Marshal", "_TPM2B_PRIVATE_Marshal", "_TPM2B_PUBLIC_Marshal", "_TPM2B_PUBLIC_KEY_RSA_Marshal", "_TPM2B_SENSITIVE_DATA_Marshal", "_TPM2B_TIMEOUT_Marshal", "_UINT8_Marshal", "_TPML_ALG_Marshal", "_TPML_DIGEST_Marshal", "_TPML_DIGEST_VALUES_Marshal", "_TPML_PCR_SELECTION_Marshal", "_TPMS_ALGORITHM_DETAIL_ECC_Marshal", "_TPMS_CAPABILITY_DATA_Marshal", "_TPMS_CONTEXT_Marshal", "_TPMS_TIME_INFO_Marshal", "_TPMT_HA_Marshal", "_TPMT_SIGNATURE_Marshal", "_TPMT_TK_AUTH_Marshal", "_TPMT_TK_CREATION_Marshal", "_TPMT_TK_HASHCHECK_Marshal", "_TPMT_TK_VERIFIED_Marshal", "_UINT16_Marshal", "___stdout_write", "___stdio_seek", "___stdio_write", "_sn_write", "__ZNKSt3__214error_category10equivalentEiRKNS_15error_conditionE", "__ZNKSt3__214error_category10equivalentERKNS_10error_codeEi", "__ZNKSt3__27collateIcE7do_hashEPKcS3_", "__ZNKSt3__27collateIwE7do_hashEPKwS3_", "__ZNKSt3__28messagesIcE7do_openERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERKNS_6localeE", "__ZNKSt3__28messagesIwE7do_openERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERKNS_6localeE", "__ZNKSt3__25ctypeIcE10do_toupperEPcPKc", "__ZNKSt3__25ctypeIcE10do_tolowerEPcPKc", "__ZNKSt3__25ctypeIcE9do_narrowEcc", "__ZNKSt3__25ctypeIwE5do_isEtw", "__ZNKSt3__25ctypeIwE10do_toupperEPwPKw", "__ZNKSt3__25ctypeIwE10do_tolowerEPwPKw", "__ZNKSt3__25ctypeIwE9do_narrowEwc", "__ZNK10__cxxabiv117__class_type_info9can_catchEPKNS_16__shim_type_infoERPv", "__ZNK10__cxxabiv123__fundamental_type_info9can_catchEPKNS_16__shim_type_infoERPv", "__ZNK10__cxxabiv119__pointer_type_info9can_catchEPKNS_16__shim_type_infoERPv", "__ZNK10__cxxabiv120__function_type_info9can_catchEPKNS_16__shim_type_infoERPv", "__ZN6tpm_js3App9ExtendPcrEiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNSt3__26vectorIhNS4_9allocatorIhEEEEiES8_PS3_JiEE6invokeERKSA_SB_i", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFiiEiPS3_JiEE6invokeERKS5_S6_i", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijEiPS3_JjEE6invokeERKS5_S6_j", "__ZN6tpm_js3App13NvDefineSpaceEjj", "__ZN6tpm_js3App7NvWriteEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_18NvReadPublicResultEjES4_PS3_JjEE6invokeERKS6_S7_j", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_10AttestInfoERKNSt3__26vectorIhNS5_9allocatorIhEEEEES4_PS3_JSB_EE6invokeERKSD_SE_PS9_", "__ZN6tpm_js3App19HierarchyChangeAuthEiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_12UnsealResultEjES4_PS3_JjEE6invokeERKS6_S7_j", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_22StartAuthSessionResultEbES4_PS3_JbEE6invokeERKS6_S7_b", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNSt3__26vectorIhNS4_9allocatorIhEEEEjES8_PS3_JjEE6invokeERKSA_SB_j", "__ZN6tpm_js3App9PolicyPCREjRKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN10emscripten12value_objectIN6tpm_js13TpmPropertiesEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js13TpmPropertiesEE5fieldIS2_NSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js19CreatePrimaryResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js19CreatePrimaryResultEE5fieldIS2_jEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js19CreatePrimaryResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js12CreateResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js12CreateResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10LoadResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10LoadResultEE5fieldIS2_jEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10LoadResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10SignResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10SignResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js18NvReadPublicResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js12NvReadResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js12NvReadResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js11QuoteResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js11QuoteResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10AttestInfoEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10AttestInfoEE5fieldIS2_jEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js10AttestInfoEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js12UnsealResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js12UnsealResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js22StartAuthSessionResultEE5fieldIS2_iEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js22StartAuthSessionResultEE5fieldIS2_jEERS3_PKcMT_T0_", "__ZN10emscripten12value_objectIN6tpm_js22StartAuthSessionResultEE5fieldIS2_NSt3__26vectorIhNS5_9allocatorIhEEEEEERS3_PKcMT_T0_", "__ZN10emscripten8internal15FunctionInvokerIPFNS_3valERKNSt3__26vectorIhNS3_9allocatorIhEEEEjES2_S9_JjEE6invokeEPSB_PS7_j", "__ZN10emscripten8internal12VectorAccessINSt3__26vectorIhNS2_9allocatorIhEEEEE3setERS6_jRKh", "__ZN6tpm_js10TssAdapter18SendCommandWrapperEP29TSS2_TCTI_OPAQUE_CONTEXT_BLOBjPKh", "_BN_sub", "_BN_add", "_ec_GFp_mont_bignum_to_felem", "_ec_GFp_mont_felem_to_bignum", "___stdio_read", "_do_read", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE23__append_forward_unsafeIPcEERS5_T_S9_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6appendEPKcj", "__ZNSt3__212basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEE23__append_forward_unsafeIPwEERS5_T_S9_", "__ZNSt3__212basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEE6appendEPKwj", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6appendEPKcj", "__ZN10__cxxabiv112_GLOBAL__N_118parse_special_nameINS0_2DbEEEPKcS4_S4_RT_", "__ZN10__cxxabiv112_GLOBAL__N_110parse_nameINS0_2DbEEEPKcS4_S4_RT_", "__ZN10__cxxabiv112_GLOBAL__N_110parse_typeINS0_2DbEEEPKcS4_S4_RT_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6insertEjPKc", "__ZNKSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE7compareEjjPKcj", "__ZN10__cxxabiv112_GLOBAL__N_117parse_source_nameINS0_2DbEEEPKcS4_S4_RT_", "__ZN10__cxxabiv112_GLOBAL__N_118parse_template_argINS0_2DbEEEPKcS4_S4_RT_", "__ZN10__cxxabiv112_GLOBAL__N_116parse_expressionINS0_2DbEEEPKcS4_S4_RT_", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_iiiii = ["0", "_TPMI_DH_ENTITY_Unmarshal", "_TPMI_DH_OBJECT_Unmarshal", "_TPMI_DH_PARENT_Unmarshal", "_TPMI_DH_PCR_Unmarshal", "_TPMI_RH_ENDORSEMENT_Unmarshal", "_TPMI_RH_HIERARCHY_Unmarshal", "_TPM2B_PUBLIC_Unmarshal", "_TPMI_ALG_CIPHER_MODE_Unmarshal", "_TPMI_ALG_HASH_Unmarshal", "_TPMI_ALG_MAC_SCHEME_Unmarshal", "_TPMI_ECC_KEY_EXCHANGE_Unmarshal", "_TPMI_RH_ENABLES_Unmarshal", "_TPMT_RSA_DECRYPT_Unmarshal", "_TPMT_SIGNATURE_Unmarshal", "_TPMT_SIG_SCHEME_Unmarshal", "_TPMT_SYM_DEF_Unmarshal", "_TPMT_SYM_DEF_OBJECT_Unmarshal", "__ZNKSt3__25ctypeIcE8do_widenEPKcS3_Pc", "__ZNKSt3__25ctypeIwE5do_isEPKwS3_Pt", "__ZNKSt3__25ctypeIwE10do_scan_isEtPKwS3_", "__ZNKSt3__25ctypeIwE11do_scan_notEtPKwS3_", "__ZNKSt3__25ctypeIwE8do_widenEPKcS3_Pw", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFiiRKNSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEEiPS3_JiSC_EE6invokeERKSE_SF_iPNS0_11BindingTypeISA_EUt_E", "__ZN6tpm_js3App15VerifySignatureEjRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEERKNS_10SignResultE", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNSt3__26vectorIhNS4_9allocatorIhEEEEjRKS8_ES8_PS3_JjSA_EE6invokeERKSC_SD_jPS8_", "__ZN6tpm_js3App12EvictControlEjjj", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijjEiPS3_JjjEE6invokeERKS5_S6_jj", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijRKNSt3__26vectorIhNS4_9allocatorIhEEEEEiPS3_JjSA_EE6invokeERKSC_SD_jPS8_", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_11QuoteResultEjRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEEES4_PS3_JjSD_EE6invokeERKSF_SG_jPNS0_11BindingTypeISB_EUt_E", "__ZN10emscripten8internal15FunctionInvokerIPFbRNSt3__26vectorIhNS2_9allocatorIhEEEEjRKhEbS7_JjS9_EE6invokeEPSB_PS6_jh", "__emval_call", "__ZN6tpm_js10TssAdapter22ReceiveResponseWrapperEP29TSS2_TCTI_OPAQUE_CONTEXT_BLOBPjPhi", "_ec_GFp_mont_point_get_affine_coordinates", "__ZNSt3__217__libcpp_sscanf_lEPKcP15__locale_structS1_z", "__ZNSt3__227__num_get_unsigned_integralImEET_PKcS3_Rji", "__ZNSt3__227__num_get_unsigned_integralIjEET_PKcS3_Rji", "__ZNSt3__227__num_get_unsigned_integralItEET_PKcS3_Rji", "__ZNSt3__225__num_get_signed_integralIlEET_PKcS3_Rji", "__ZNSt3__219__libcpp_asprintf_lEPPcP15__locale_structPKcz", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6insertEjPKcj", "__ZN10__cxxabiv112_GLOBAL__N_123parse_binary_expressionINS0_2DbEEEPKcS4_S4_RKNT_6StringERS5_", "__ZN10__cxxabiv112_GLOBAL__N_123parse_prefix_expressionINS0_2DbEEEPKcS4_S4_RKNT_6StringERS5_", "__ZN10__cxxabiv112_GLOBAL__N_121parse_integer_literalINS0_2DbEEEPKcS4_S4_RKNT_6StringERS5_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6insertIPKcEENS_9enable_ifIXaasr21__is_forward_iteratorIT_EE5valuesr38__libcpp_string_gets_noexcept_iteratorISC_EE5valueENS_11__wrap_iterIPcEEE4typeENSD_ISA_EESC_SC_", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_iiiiid = ["0", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcd", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEce", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwd", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwe", "0", "0", "0"];
-var debug_table_iiiiii = ["0", "__ZNKSt3__27collateIcE10do_compareEPKcS3_S3_S3_", "__ZNKSt3__27collateIwE10do_compareEPKwS3_S3_S3_", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcb", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcl", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcm", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcPKv", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwb", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwl", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwm", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwPKv", "__ZNKSt3__27codecvtIDic11__mbstate_tE10do_unshiftERS1_PcS4_RS4_", "__ZNKSt3__27codecvtIDic11__mbstate_tE9do_lengthERS1_PKcS5_j", "__ZNKSt3__27codecvtIwc11__mbstate_tE10do_unshiftERS1_PcS4_RS4_", "__ZNKSt3__27codecvtIwc11__mbstate_tE9do_lengthERS1_PKcS5_j", "__ZNKSt3__25ctypeIcE9do_narrowEPKcS3_cPc", "__ZNKSt3__25ctypeIwE9do_narrowEPKwS3_cPc", "__ZNKSt3__27codecvtIcc11__mbstate_tE10do_unshiftERS1_PcS4_RS4_", "__ZNKSt3__27codecvtIcc11__mbstate_tE9do_lengthERS1_PKcS5_j", "__ZNKSt3__27codecvtIDsc11__mbstate_tE10do_unshiftERS1_PcS4_RS4_", "__ZNKSt3__27codecvtIDsc11__mbstate_tE9do_lengthERS1_PKcS5_j", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_10LoadResultEjRKNSt3__26vectorIhNS5_9allocatorIhEEEESB_ES4_PS3_JjSB_SB_EE6invokeERKSD_SE_jPS9_SI_", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_10SignResultEjiRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEEES4_PS3_JjiSD_EE6invokeERKSF_SG_jiPNS0_11BindingTypeISB_EUt_E", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijRKNSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEERKNS2_10SignResultEEiPS3_JjSC_SF_EE6invokeERKSH_SI_jPNS0_11BindingTypeISA_EUt_EPSD_", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijjjEiPS3_JjjjEE6invokeERKS5_S6_jjj", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_12NvReadResultEjiiES4_PS3_JjiiEE6invokeERKS6_S7_jii", "_ec_GFp_mont_group_set_curve", "0", "0", "0", "0", "0"];
-var debug_table_iiiiiid = ["0", "__ZNKSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_bRNS_8ios_baseEce", "__ZNKSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_bRNS_8ios_baseEwe", "0"];
-var debug_table_iiiiiii = ["0", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRb", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRl", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRx", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRt", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjS8_", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRm", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRy", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRf", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRd", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRe", "__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRPv", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRb", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRl", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRx", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRt", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjS8_", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRm", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRy", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRf", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRd", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRe", "__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRPv", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE11do_get_timeES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE11do_get_dateES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE14do_get_weekdayES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE16do_get_monthnameES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE11do_get_yearES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE11do_get_timeES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE11do_get_dateES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE14do_get_weekdayES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE16do_get_monthnameES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE11do_get_yearES4_S4_RNS_8ios_baseERjP2tm", "__ZNKSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_bRNS_8ios_baseEcRKNS_12basic_stringIcS3_NS_9allocatorIcEEEE", "__ZNKSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_bRNS_8ios_baseEwRKNS_12basic_stringIwS3_NS_9allocatorIwEEEE", "__ZNSt3__216__pad_and_outputIcNS_11char_traitsIcEEEENS_19ostreambuf_iteratorIT_T0_EES6_PKS4_S8_S8_RNS_8ios_baseES4_", "__ZNSt3__216__pad_and_outputIwNS_11char_traitsIwEEEENS_19ostreambuf_iteratorIT_T0_EES6_PKS4_S8_S8_RNS_8ios_baseES4_", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_iiiiiiii = ["0", "__ZNKSt3__28time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcPK2tmcc", "__ZNKSt3__28time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwPK2tmcc", "__ZNKSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_bRNS_8ios_baseERjRe", "__ZNKSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_bRNS_8ios_baseERjRNS_12basic_stringIcS3_NS_9allocatorIcEEEE", "__ZNKSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_bRNS_8ios_baseERjRe", "__ZNKSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_bRNS_8ios_baseERjRNS_12basic_stringIwS3_NS_9allocatorIwEEEE", "__ZNSt3__214__scan_keywordINS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEPKNS_12basic_stringIcS3_NS_9allocatorIcEEEENS_5ctypeIcEEEET0_RT_SE_SD_SD_RKT1_Rjb", "__ZNSt3__214__scan_keywordINS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEPKNS_12basic_stringIwS3_NS_9allocatorIwEEEENS_5ctypeIwEEEET0_RT_SE_SD_SD_RKT1_Rjb", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_iiiiiiiii = ["0", "__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjP2tmcc", "__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjP2tmcc", "__ZNKSt3__27codecvtIDic11__mbstate_tE6do_outERS1_PKDiS5_RS5_PcS7_RS7_", "__ZNKSt3__27codecvtIDic11__mbstate_tE5do_inERS1_PKcS5_RS5_PDiS7_RS7_", "__ZNKSt3__27codecvtIwc11__mbstate_tE6do_outERS1_PKwS5_RS5_PcS7_RS7_", "__ZNKSt3__27codecvtIwc11__mbstate_tE5do_inERS1_PKcS5_RS5_PwS7_RS7_", "__ZNKSt3__27codecvtIcc11__mbstate_tE6do_outERS1_PKcS5_RS5_PcS7_RS7_", "__ZNKSt3__27codecvtIcc11__mbstate_tE5do_inERS1_PKcS5_RS5_PcS7_RS7_", "__ZNKSt3__27codecvtIDsc11__mbstate_tE6do_outERS1_PKDsS5_RS5_PcS7_RS7_", "__ZNKSt3__27codecvtIDsc11__mbstate_tE5do_inERS1_PKcS5_RS5_PDsS7_RS7_", "0", "0", "0", "0", "0"];
-var debug_table_iiiiiiiiiii = ["0", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_12CreateResultEjiiiiRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEESD_RKNS5_6vectorIhNS9_IhEEEEES4_PS3_JjiiiiSD_SD_SI_EE6invokeERKSK_SL_jiiiiPNS0_11BindingTypeISB_EUt_ESS_PSG_", "__ZNSt3__29__num_getIcE17__stage2_int_loopEciPcRS2_RjcRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPjRSD_PKc", "__ZNSt3__29__num_getIwE17__stage2_int_loopEwiPcRS2_RjwRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPjRSD_PKw"];
-var debug_table_iiiiiiiiiiii = ["0", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_19CreatePrimaryResultEiiiiiRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEESD_SD_RKNS5_6vectorIhNS9_IhEEEEES4_PS3_JiiiiiSD_SD_SD_SI_EE6invokeERKSK_SL_iiiiiPNS0_11BindingTypeISB_EUt_ESS_SS_PSG_", "__ZNSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE8__do_getERS4_S4_bRKNS_6localeEjRjRbRKNS_5ctypeIcEERNS_10unique_ptrIcPFvPvEEERPcSM_", "__ZNSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE8__do_getERS4_S4_bRKNS_6localeEjRjRbRKNS_5ctypeIwEERNS_10unique_ptrIwPFvPvEEERPwSM_"];
-var debug_table_iiiiiiiiiiiii = ["0", "__ZNSt3__29__num_getIcE19__stage2_float_loopEcRbRcPcRS4_ccRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPjRSE_RjS4_", "__ZNSt3__29__num_getIwE19__stage2_float_loopEwRbRcPcRS4_wwRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPjRSE_RjPw", "0"];
-var debug_table_iiiiij = ["0", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcx", "__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcy", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwx", "__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwy", "0", "0", "0"];
-var debug_table_jiiii = ["0", "__ZNSt3__227__num_get_unsigned_integralIyEET_PKcS3_Rji", "__ZNSt3__225__num_get_signed_integralIxEET_PKcS3_Rji", "0"];
-var debug_table_v = ["0", "__ZL25default_terminate_handlerv", "__ZN6tpm_js9Simulator7PowerOnEv", "__ZN6tpm_js9Simulator8PowerOffEv", "__ZN6tpm_js9Simulator16ManufactureResetEv", "___cxa_end_catch", "_BN_value_one_init", "_init_once", "_EVP_sha256_init", "_EC_GFp_mont_method_init", "_thread_local_init", "__ZSt17__throw_bad_allocv", "__ZNSt3__2L10init_weeksEv", "__ZNSt3__2L11init_monthsEv", "__ZNSt3__2L10init_am_pmEv", "__ZNSt3__2L11init_wweeksEv", "__ZNSt3__2L12init_wmonthsEv", "__ZNSt3__2L11init_wam_pmEv", "__ZNSt3__212_GLOBAL__N_14makeINS_7collateIcEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7collateIwEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_5ctypeIwEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7codecvtIcc11__mbstate_tEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7codecvtIwc11__mbstate_tEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7codecvtIDsc11__mbstate_tEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7codecvtIDic11__mbstate_tEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_7num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_10moneypunctIcLb0EEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_10moneypunctIcLb1EEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_10moneypunctIwLb0EEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_10moneypunctIwLb1EEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_9money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_9money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_9money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_9money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_8time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_8time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_8time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_8time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_8messagesIcEEjEERT_T0_", "__ZNSt3__212_GLOBAL__N_14makeINS_8messagesIwEEjEERT_T0_", "___cxa_rethrow", "__ZN10__cxxabiv112_GLOBAL__N_110construct_Ev", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_vi = ["0", "__ZNSt3__210__function6__baseIFNS_6vectorIhNS_9allocatorIhEEEERKS5_EED2Ev", "__ZNSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_ED0Ev", "__ZNSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_E7destroyEv", "__ZNSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_E18destroy_deallocateEv", "__ZNSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev", "__ZNSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev", "__ZThn8_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev", "__ZThn8_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev", "__ZTv0_n12_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev", "__ZTv0_n12_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev", "__ZNSt3__213basic_istreamIcNS_11char_traitsIcEEED1Ev", "__ZNSt3__213basic_istreamIcNS_11char_traitsIcEEED0Ev", "__ZTv0_n12_NSt3__213basic_istreamIcNS_11char_traitsIcEEED1Ev", "__ZTv0_n12_NSt3__213basic_istreamIcNS_11char_traitsIcEEED0Ev", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEED2Ev", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev", "__ZNSt3__214basic_iostreamIcNS_11char_traitsIcEEED1Ev", "__ZNSt3__214basic_iostreamIcNS_11char_traitsIcEEED0Ev", "__ZThn8_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED1Ev", "__ZThn8_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED0Ev", "__ZTv0_n12_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED1Ev", "__ZTv0_n12_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED0Ev", "__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEED1Ev", "__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEED0Ev", "__ZTv0_n12_NSt3__213basic_ostreamIcNS_11char_traitsIcEEED1Ev", "__ZTv0_n12_NSt3__213basic_ostreamIcNS_11char_traitsIcEEED0Ev", "__ZNSt3__217bad_function_callD2Ev", "__ZNSt3__217bad_function_callD0Ev", "__ZNSt3__28ios_baseD2Ev", "__ZNSt3__28ios_baseD0Ev", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEED2Ev", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEED0Ev", "__ZNSt3__214error_categoryD2Ev", "__ZNSt3__219__iostream_categoryD0Ev", "__ZNSt3__28ios_base7failureD2Ev", "__ZNSt3__28ios_base7failureD0Ev", "__ZNSt3__27collateIcED2Ev", "__ZNSt3__27collateIcED0Ev", "__ZNSt3__26locale5facet16__on_zero_sharedEv", "__ZNSt3__27collateIwED2Ev", "__ZNSt3__27collateIwED0Ev", "__ZNSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev", "__ZNSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev", "__ZNSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev", "__ZNSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev", "__ZNSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev", "__ZNSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev", "__ZNSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev", "__ZNSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev", "__ZNSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev", "__ZNSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev", "__ZNSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev", "__ZNSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev", "__ZNSt3__28time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev", "__ZNSt3__28time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev", "__ZNSt3__28time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev", "__ZNSt3__28time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev", "__ZNSt3__210moneypunctIcLb0EED2Ev", "__ZNSt3__210moneypunctIcLb0EED0Ev", "__ZNSt3__210moneypunctIcLb1EED2Ev", "__ZNSt3__210moneypunctIcLb1EED0Ev", "__ZNSt3__210moneypunctIwLb0EED2Ev", "__ZNSt3__210moneypunctIwLb0EED0Ev", "__ZNSt3__210moneypunctIwLb1EED2Ev", "__ZNSt3__210moneypunctIwLb1EED0Ev", "__ZNSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev", "__ZNSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev", "__ZNSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev", "__ZNSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev", "__ZNSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev", "__ZNSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev", "__ZNSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev", "__ZNSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev", "__ZNSt3__28messagesIcED2Ev", "__ZNSt3__28messagesIcED0Ev", "__ZNSt3__28messagesIwED2Ev", "__ZNSt3__28messagesIwED0Ev", "__ZNSt3__26locale5facetD2Ev", "__ZNSt3__216__narrow_to_utf8ILj32EED0Ev", "__ZNSt3__217__widen_from_utf8ILj32EED0Ev", "__ZNSt3__27codecvtIwc11__mbstate_tED2Ev", "__ZNSt3__27codecvtIwc11__mbstate_tED0Ev", "__ZNSt3__26locale5__impD2Ev", "__ZNSt3__26locale5__impD0Ev", "__ZNSt3__25ctypeIcED2Ev", "__ZNSt3__25ctypeIcED0Ev", "__ZNSt3__28numpunctIcED2Ev", "__ZNSt3__28numpunctIcED0Ev", "__ZNSt3__28numpunctIwED2Ev", "__ZNSt3__28numpunctIwED0Ev", "__ZNSt3__26locale5facetD0Ev", "__ZNSt3__25ctypeIwED0Ev", "__ZNSt3__27codecvtIcc11__mbstate_tED0Ev", "__ZNSt3__27codecvtIDsc11__mbstate_tED0Ev", "__ZNSt3__27codecvtIDic11__mbstate_tED0Ev", "__ZNSt3__212system_errorD2Ev", "__ZNSt3__212system_errorD0Ev", "__ZN10__cxxabiv116__shim_type_infoD2Ev", "__ZN10__cxxabiv117__class_type_infoD0Ev", "__ZNK10__cxxabiv116__shim_type_info5noop1Ev", "__ZNK10__cxxabiv116__shim_type_info5noop2Ev", "__ZN10__cxxabiv120__si_class_type_infoD0Ev", "__ZNSt9bad_allocD2Ev", "__ZNSt9bad_allocD0Ev", "__ZNSt11logic_errorD2Ev", "__ZNSt11logic_errorD0Ev", "__ZNSt13runtime_errorD2Ev", "__ZNSt13runtime_errorD0Ev", "__ZNSt12length_errorD0Ev", "__ZNSt12out_of_rangeD0Ev", "__ZNSt14overflow_errorD0Ev", "__ZNSt8bad_castD2Ev", "__ZNSt8bad_castD0Ev", "__ZN10__cxxabiv123__fundamental_type_infoD0Ev", "__ZN10__cxxabiv119__pointer_type_infoD0Ev", "__ZN10__cxxabiv120__function_type_infoD0Ev", "__ZN10__cxxabiv121__vmi_class_type_infoD0Ev", "__ZN6tpm_js9Simulator18GetEndorsementSeedEv", "__ZN6tpm_js9Simulator15GetPlatformSeedEv", "__ZN6tpm_js9Simulator12GetOwnerSeedEv", "__ZN6tpm_js9Simulator11GetNullSeedEv", "__ZN10emscripten8internal14raw_destructorIN6tpm_js3AppEEEvPT_", "__ZN10emscripten8internal7InvokerIvJEE6invokeEPFvvE", "__ZN10emscripten8internal14raw_destructorIN6tpm_js13TpmPropertiesEEEvPT_", "__embind_finalize_value_object", "__ZN10emscripten8internal14raw_destructorIN6tpm_js19CreatePrimaryResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js12CreateResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js10LoadResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js10SignResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js18NvReadPublicResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js12NvReadResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js11QuoteResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js10AttestInfoEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js12UnsealResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorIN6tpm_js22StartAuthSessionResultEEEvPT_", "__ZN10emscripten8internal14raw_destructorINSt3__26vectorIhNS2_9allocatorIhEEEEEEvPT_", "__emval_decref", "__ZN6tpm_js3AppC2Ev", "__ZNSt3__28ios_base33__set_badbit_and_consider_rethrowEv", "__ZN6tpm_js12_GLOBAL__N_113sapi_teardownEP29_TSS2_SYS_OPAQUE_CONTEXT_BLOB", "_sha256_init", "_ec_GFp_mont_group_finish", "_thread_local_destructor", "_err_state_free", "__ZNSt3__26locale2id6__initEv", "__ZNSt3__217__call_once_proxyINS_5tupleIJONS_12_GLOBAL__N_111__fake_bindEEEEEEvPv", "__ZNSt3__212__do_nothingEPv", "__ZNSt3__221__throw_runtime_errorEPKc", "_free", "__ZN10__cxxabiv112_GLOBAL__N_19destruct_EPv", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE7reserveEj", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE5eraseEjj", "__ZNSt3__26vectorIN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEE8allocateEj", "__ZN10__cxxabiv112_GLOBAL__N_111string_pairC2ILj22EEERAT__Kc", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0", "0"];
-var debug_table_vii = ["0", "__ZNKSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_E7__cloneEPNS0_6__baseIS8_EE", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE5imbueERKNS_6localeE", "__ZNKSt3__210moneypunctIcLb0EE11do_groupingEv", "__ZNKSt3__210moneypunctIcLb0EE14do_curr_symbolEv", "__ZNKSt3__210moneypunctIcLb0EE16do_positive_signEv", "__ZNKSt3__210moneypunctIcLb0EE16do_negative_signEv", "__ZNKSt3__210moneypunctIcLb0EE13do_pos_formatEv", "__ZNKSt3__210moneypunctIcLb0EE13do_neg_formatEv", "__ZNKSt3__210moneypunctIcLb1EE11do_groupingEv", "__ZNKSt3__210moneypunctIcLb1EE14do_curr_symbolEv", "__ZNKSt3__210moneypunctIcLb1EE16do_positive_signEv", "__ZNKSt3__210moneypunctIcLb1EE16do_negative_signEv", "__ZNKSt3__210moneypunctIcLb1EE13do_pos_formatEv", "__ZNKSt3__210moneypunctIcLb1EE13do_neg_formatEv", "__ZNKSt3__210moneypunctIwLb0EE11do_groupingEv", "__ZNKSt3__210moneypunctIwLb0EE14do_curr_symbolEv", "__ZNKSt3__210moneypunctIwLb0EE16do_positive_signEv", "__ZNKSt3__210moneypunctIwLb0EE16do_negative_signEv", "__ZNKSt3__210moneypunctIwLb0EE13do_pos_formatEv", "__ZNKSt3__210moneypunctIwLb0EE13do_neg_formatEv", "__ZNKSt3__210moneypunctIwLb1EE11do_groupingEv", "__ZNKSt3__210moneypunctIwLb1EE14do_curr_symbolEv", "__ZNKSt3__210moneypunctIwLb1EE16do_positive_signEv", "__ZNKSt3__210moneypunctIwLb1EE16do_negative_signEv", "__ZNKSt3__210moneypunctIwLb1EE13do_pos_formatEv", "__ZNKSt3__210moneypunctIwLb1EE13do_neg_formatEv", "__ZNKSt3__28messagesIcE8do_closeEi", "__ZNKSt3__28messagesIwE8do_closeEi", "__ZNKSt3__28numpunctIcE11do_groupingEv", "__ZNKSt3__28numpunctIcE11do_truenameEv", "__ZNKSt3__28numpunctIcE12do_falsenameEv", "__ZNKSt3__28numpunctIwE11do_groupingEv", "__ZNKSt3__28numpunctIwE11do_truenameEv", "__ZNKSt3__28numpunctIwE12do_falsenameEv", "__ZN6tpm_js9Simulator6GetPcrEi", "__ZN6tpm_js3App16GetTpmPropertiesEv", "__ZN6tpm_js3App27CreatePrimaryEndorsementKeyEv", "__ZN6tpm_js3App15SetAuthPasswordERKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE", "__ZN6tpm_js3App16SetSessionHandleEj", "__ZNSt3__26vectorIhNS_9allocatorIhEEE9push_backERKh", "__ZN10emscripten8internal11BindingTypeINSt3__212basic_stringIcNS2_11char_traitsIcEENS2_9allocatorIcEEEEE12fromWireTypeEPNS9_Ut_E", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7reserveEj", "__ZNSt3__26vectorIhNS_9allocatorIhEEEC2ERKS3_", "__ZNSt3__26vectorIhNS_9allocatorIhEEE8allocateEj", "__ZNSt3__26vectorIhNS_9allocatorIhEEE26__swap_out_circular_bufferERNS_14__split_bufferIhRS2_EE", "__ZNSt3__26vectorIhNS_9allocatorIhEEE6resizeEj", "__ZNSt3__26vectorIhNS_9allocatorIhEEE18__construct_at_endEj", "__ZNSt3__214__split_bufferIhRNS_9allocatorIhEEE18__construct_at_endEj", "__ZN6tpm_js9Simulator14ExecuteCommandERKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN6tpm_js10TssAdapterC2ENSt3__28functionIFNS1_6vectorIhNS1_9allocatorIhEEEERKS6_EEE", "__ZN6tpm_js12_GLOBAL__N_115CapUintToStringEj", "__ZN6tpm_js12_GLOBAL__N_112TPM2BMarshalI13TPM2B_PRIVATEXadL_Z29Tss2_MU_TPM2B_PRIVATE_MarshalEEEENSt3__26vectorIhNS3_9allocatorIhEEEEPKT_", "__ZN6tpm_js12_GLOBAL__N_112TPM2BMarshalI12TPM2B_PUBLICXadL_Z28Tss2_MU_TPM2B_PUBLIC_MarshalEEEENSt3__26vectorIhNS3_9allocatorIhEEEEPKT_", "__ZN10emscripten3val6globalEPKc", "__ZNSt3__26vectorIcNS_9allocatorIcEEE8allocateEj", "__ZNSt3__26vectorIcNS_9allocatorIcEEE18__construct_at_endEj", "__ZN6tpm_js12_GLOBAL__N_113HexDumpBufferERKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZNKSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE3strEv", "__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEE6sentryC2ERS3_", "__ZNSt3__28ios_base5clearEj", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE9push_backEc", "__ZNSt3__213unordered_mapIjNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEENS_4hashIjEENS_8equal_toIjEENS4_INS_4pairIKjS6_EEEEEC2ESt16initializer_listISD_E", "__ZNSt3__212__hash_tableINS_17__hash_value_typeIjNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEEENS_22__unordered_map_hasherIjS8_NS_4hashIjEELb1EEENS_21__unordered_map_equalIjS8_NS_8equal_toIjEELb1EEENS5_IS8_EEE6rehashEj", "__ZNSt3__24pairIKjNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEEC2ERKS8_", "__ZNSt11logic_errorC2EPKc", "_gcm_gmult_4bit", "_sha256_final", "__ZNSt13runtime_errorC2EPKc", "__ZNSt3__28ios_base16__call_callbacksENS0_5eventE", "__ZNSt3__212basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEE9push_backEw", "__ZNSt3__212basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEE7reserveEj", "__ZNSt3__26vectorIPNS_6locale5facetENS_15__sso_allocatorIS3_Lj28EEEEC2Ej", "__ZNSt3__26locale5__imp7installINS_7collateIcEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7collateIwEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_5ctypeIcEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_5ctypeIwEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7codecvtIcc11__mbstate_tEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7codecvtIwc11__mbstate_tEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7codecvtIDsc11__mbstate_tEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7codecvtIDic11__mbstate_tEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8numpunctIcEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8numpunctIwEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_7num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_10moneypunctIcLb0EEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_10moneypunctIcLb1EEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_10moneypunctIwLb0EEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_10moneypunctIwLb1EEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_9money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_9money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_9money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_9money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8messagesIcEEEEvPT_", "__ZNSt3__26locale5__imp7installINS_8messagesIwEEEEvPT_", "__ZNSt3__26vectorIPNS_6locale5facetENS_15__sso_allocatorIS3_Lj28EEEE8allocateEj", "__ZNSt3__26vectorIPNS_6locale5facetENS_15__sso_allocatorIS3_Lj28EEEE18__construct_at_endEj", "__ZNSt3__26vectorIPNS_6locale5facetENS_15__sso_allocatorIS3_Lj28EEEE6resizeEj", "__ZNSt3__214__split_bufferIPNS_6locale5facetERNS_15__sso_allocatorIS3_Lj28EEEE18__construct_at_endEj", "__ZNSt3__26vectorIPNS_6locale5facetENS_15__sso_allocatorIS3_Lj28EEEE26__swap_out_circular_bufferERNS_14__split_bufferIS3_RS5_EE", "__ZNSt3__218__libcpp_refstringC2EPKc", "__ZNSt13runtime_errorC2ERKNSt3__212basic_stringIcNS0_11char_traitsIcEENS0_9allocatorIcEEEE", "_abort_message", "__ZN10__cxxabiv112_GLOBAL__N_12DbC2ILj4096EEERNS0_5arenaIXT_EEE", "__ZNSt3__26vectorINS0_INS0_IN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEEENS4_IS6_Lj4096EEEEENS4_IS8_Lj4096EEEE24__emplace_back_slow_pathIJRNS2_5arenaILj4096EEEEEEvDpOT_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE9push_backEc", "__ZN10__cxxabiv112_GLOBAL__N_111string_pair9move_fullEv", "__ZNSt3__26vectorINS0_IN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEEENS4_IS6_Lj4096EEEE21__push_back_slow_pathIS6_EEvOT_", "__ZNSt3__26vectorIN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEE21__push_back_slow_pathIS3_EEvOT_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEEC2ERKS7_", "__ZN10__cxxabiv112_GLOBAL__N_111string_pairC2ERKS1_", "__ZNSt3__26vectorINS0_INS0_IN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEEENS4_IS6_Lj4096EEEEENS4_IS8_Lj4096EEEE24__emplace_back_slow_pathIJS5_EEEvDpOT_", "__ZNSt3__26vectorINS0_IN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEEENS4_IS6_Lj4096EEEE24__emplace_back_slow_pathIJS5_EEEvDpOT_", "__ZNSt3__26vectorIN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEE21__push_back_slow_pathIRKS3_EEvOT_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6assignEPKc", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEEaSERKS7_", "0", "0", "0", "0", "0", "0"];
-var debug_table_viii = ["0", "__ZNSt3__210__function6__funcIPFNS_6vectorIhNS_9allocatorIhEEEERKS5_ENS3_IS9_EES8_EclES7_", "__ZNKSt3__214error_category23default_error_conditionEi", "__ZNKSt3__219__iostream_category7messageEi", "__ZN6tpm_js3App9GetRandomEi", "__ZN6tpm_js3App12NvReadPublicEj", "__ZN6tpm_js3App21UnmarshalAttestBufferERKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFvRKNSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEEvPS3_JSC_EE6invokeERKSE_SF_PNS0_11BindingTypeISA_EUt_E", "__ZN6tpm_js3App6UnsealEj", "__ZN6tpm_js3App16StartAuthSessionEb", "__ZN6tpm_js3App15PolicyGetDigestEj", "__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFvjEvPS3_JjEE6invokeERKS5_S6_j", "__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesENSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEE7setWireIS3_EEvRKMS3_SA_RT_PNS0_11BindingTypeISA_EUt_E", "__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEjE7setWireIS3_EEvRKMS3_jRT_j", "__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEjE7setWireIS3_EEvRKMS3_jRT_j", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js18NvReadPublicResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEjE7setWireIS3_EEvRKMS3_jRT_j", "__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEiE7setWireIS3_EEvRKMS3_iRT_i", "__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEjE7setWireIS3_EEvRKMS3_jRT_j", "__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_", "__ZN10emscripten8internal13MethodInvokerIMNSt3__26vectorIhNS2_9allocatorIhEEEEFvRKhEvPS6_JS8_EE6invokeERKSA_SB_h", "__ZNSt3__26vectorIhNS_9allocatorIhEEE6resizeEjRKh", "__ZN10emscripten8internal12VectorAccessINSt3__26vectorIhNS2_9allocatorIhEEEEE3getERKS6_j", "__ZNSt3__214__split_bufferIhRNS_9allocatorIhEEE18__construct_at_endEjRKh", "__ZNSt3__26vectorIhNS_9allocatorIhEEEC2IPhEET_NS_9enable_ifIXaasr21__is_forward_iteratorIS6_EE5valuesr16is_constructibleIhNS_15iterator_traitsIS6_E9referenceEEE5valueES6_E4typeE", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6__initINS_11__wrap_iterIPcEEEENS_9enable_ifIXsr21__is_forward_iteratorIT_EE5valueEvE4typeESB_SB_", "__ZNSt3__26vectorIhNS_9allocatorIhEEE6assignIPKhEENS_9enable_ifIXaasr21__is_forward_iteratorIT_EE5valuesr16is_constructibleIhNS_15iterator_traitsIS8_E9referenceEEE5valueEvE4typeES8_S8_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6resizeEjc", "__ZNSt3__26vectorIhNS_9allocatorIhEEE6assignIPhEENS_9enable_ifIXaasr21__is_forward_iteratorIT_EE5valuesr16is_constructibleIhNS_15iterator_traitsIS7_E9referenceEEE5valueEvE4typeES7_S7_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE6__initEPKcj", "_AES_decrypt", "_AES_encrypt", "_sha256_update", "_ec_GFp_mont_felem_sqr", "_ec_simple_scalar_inv_montgomery", "__ZNSt3__28ios_base7failureC2EPKcRKNS_10error_codeE", "___cxa_throw", "__ZNSt3__212basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEE6__initEPKwj", "__ZNSt3__219__double_or_nothingIcEEvRNS_10unique_ptrIT_PFvPvEEERPS2_S9_", "__ZNSt3__219__double_or_nothingIjEEvRNS_10unique_ptrIT_PFvPvEEERPS2_S9_", "__ZNSt3__219__double_or_nothingIwEEvRNS_10unique_ptrIT_PFvPvEEERPS2_S9_", "__ZNSt3__212system_error6__initERKNS_10error_codeENS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE", "__ZNSt3__26vectorIN10__cxxabiv112_GLOBAL__N_111string_pairENS2_11short_allocIS3_Lj4096EEEEC2EjRKS3_RKS5_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEEC2ERKS7_jjRKS6_", "__ZNSt3__2plIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEEENS_12basic_stringIT_T0_T1_EERKSB_PKS8_", "__ZNSt3__2plIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEEENS_12basic_stringIT_T0_T1_EEPKS8_RKSB_", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6__initIPKcEENS_9enable_ifIXsr21__is_forward_iteratorIT_EE5valueEvE4typeESC_SC_"];
-var debug_table_viiii = ["0", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE7seekposENS_4fposI11__mbstate_tEEj", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE7seekposENS_4fposI11__mbstate_tEEj", "__ZNKSt3__27collateIcE12do_transformEPKcS3_", "__ZNKSt3__27collateIwE12do_transformEPKwS3_", "__ZNK10__cxxabiv117__class_type_info27has_unambiguous_public_baseEPNS_19__dynamic_cast_infoEPvi", "__ZNK10__cxxabiv120__si_class_type_info27has_unambiguous_public_baseEPNS_19__dynamic_cast_infoEPvi", "__ZNK10__cxxabiv121__vmi_class_type_info27has_unambiguous_public_baseEPNS_19__dynamic_cast_infoEPvi", "__ZN6tpm_js3App7EncryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN6tpm_js3App7DecryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN6tpm_js3App10RSAEncryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN6tpm_js3App10RSADecryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE", "__ZN6tpm_js3App5QuoteEjRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE", "__ZN10emscripten8internal13MethodInvokerIMNSt3__26vectorIhNS2_9allocatorIhEEEEFvjRKhEvPS6_JjS8_EE6invokeERKSA_SB_jh", "__ZNSt3__26vectorIhNS_9allocatorIhEEE18__construct_at_endIPhEENS_9enable_ifIXsr21__is_forward_iteratorIT_EE5valueEvE4typeES7_S7_j", "__ZNSt3__26vectorIhNS_9allocatorIhEEE18__construct_at_endIPKhEENS_9enable_ifIXsr21__is_forward_iteratorIT_EE5valueEvE4typeES8_S8_j", "__ZN6tpm_js3App13GetCapabilityEjj", "___assert_fail", "__ZNK10emscripten3valclIJRiRNSt3__212basic_stringIcNS3_11char_traitsIcEENS3_9allocatorIcEEEEEEES0_DpOT_", "__ZNSt3__212__hash_tableINS_17__hash_value_typeIjNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEEENS_22__unordered_map_hasherIjS8_NS_4hashIjEELb1EEENS_21__unordered_map_equalIjS8_NS_8equal_toIjEELb1EEENS5_IS8_EEE21__construct_node_hashIRKNS_4pairIKjS7_EEJEEENS_10unique_ptrINS_11__hash_nodeIS8_PvEENS_22__hash_node_destructorINS5_ISS_EEEEEEjOT_DpOT0_", "_ExecuteCommand", "_gcm_ghash_4bit", "_ec_GFp_mont_felem_mul", "__ZNSt3__216__check_groupingERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEEPjS8_Rj", "__ZN10__cxxabiv112_GLOBAL__N_18demangleINS0_2DbEEEvPKcS4_RT_Ri", "__ZNSt3__212basic_stringIcNS_11char_traitsIcEEN10__cxxabiv112_GLOBAL__N_112malloc_allocIcEEE6__initEPKcjj", "0", "0", "0", "0", "0", "0"];
-var debug_table_viiiii = ["0", "__ZNK10__cxxabiv117__class_type_info16search_below_dstEPNS_19__dynamic_cast_infoEPKvib", "__ZNK10__cxxabiv120__si_class_type_info16search_below_dstEPNS_19__dynamic_cast_infoEPKvib", "__ZNK10__cxxabiv121__vmi_class_type_info16search_below_dstEPNS_19__dynamic_cast_infoEPKvib", "__ZN6tpm_js3App4LoadEjRKNSt3__26vectorIhNS1_9allocatorIhEEEES7_", "__ZN6tpm_js3App4SignEjiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE", "__ZN6tpm_js3App6NvReadEjii", "__ZN6tpm_js10LogMessageEPKciiS1_z", "_ec_GFp_simple_mul", "_ec_GFp_simple_mul_public", "0", "0", "0", "0", "0", "0"];
-var debug_table_viiiiii = ["0", "__ZNKSt3__28messagesIcE6do_getEiiiRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE", "__ZNKSt3__28messagesIwE6do_getEiiiRKNS_12basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEEE", "__ZNK10__cxxabiv117__class_type_info16search_above_dstEPNS_19__dynamic_cast_infoEPKvS4_ib", "__ZNK10__cxxabiv120__si_class_type_info16search_above_dstEPNS_19__dynamic_cast_infoEPKvS4_ib", "__ZNK10__cxxabiv121__vmi_class_type_info16search_above_dstEPNS_19__dynamic_cast_infoEPKvS4_ib", "__embind_register_value_object", "0"];
-var debug_table_viiiiiii = ["0", "__ZNSt3__29__num_putIcE21__widen_and_group_intEPcS2_S2_S2_RS2_S3_RKNS_6localeE", "__ZNSt3__29__num_putIcE23__widen_and_group_floatEPcS2_S2_S2_RS2_S3_RKNS_6localeE", "__ZNSt3__29__num_putIwE21__widen_and_group_intEPcS2_S2_PwRS3_S4_RKNS_6localeE", "__ZNSt3__29__num_putIwE23__widen_and_group_floatEPcS2_S2_PwRS3_S4_RKNS_6localeE", "0", "0", "0"];
-var debug_table_viiiiiiiiii = ["0", "__ZN6tpm_js3App6CreateEjiiiiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_RKNS1_6vectorIhNS5_IhEEEE", "__ZNSt3__211__money_getIcE13__gather_infoEbRKNS_6localeERNS_10money_base7patternERcS8_RNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEESF_SF_SF_Ri", "__ZNSt3__211__money_getIwE13__gather_infoEbRKNS_6localeERNS_10money_base7patternERwS8_RNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERNS9_IwNSA_IwEENSC_IwEEEESJ_SJ_Ri", "__ZNSt3__211__money_putIcE13__gather_infoEbbRKNS_6localeERNS_10money_base7patternERcS8_RNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEESF_SF_Ri", "__ZNSt3__211__money_putIwE13__gather_infoEbbRKNS_6localeERNS_10money_base7patternERwS8_RNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERNS9_IwNSA_IwEENSC_IwEEEESJ_Ri", "0", "0"];
-var debug_table_viiiiiiiiiii = ["0", "__ZN6tpm_js3App13CreatePrimaryEiiiiiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_S9_RKNS1_6vectorIhNS5_IhEEEE"];
-var debug_table_viiiiiiiiiiiiiii = ["0", "__ZNSt3__211__money_putIcE8__formatEPcRS2_S3_jPKcS5_RKNS_5ctypeIcEEbRKNS_10money_base7patternEccRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEESL_SL_i", "__ZNSt3__211__money_putIwE8__formatEPwRS2_S3_jPKwS5_RKNS_5ctypeIwEEbRKNS_10money_base7patternEwwRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERKNSE_IwNSF_IwEENSH_IwEEEESQ_i", "0"];
-var debug_table_viijii = ["0", "__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE7seekoffExNS_8ios_base7seekdirEj", "__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE7seekoffExNS_8ios_base7seekdirEj", "0"];
-function nullFunc_diii(x) { err("Invalid function pointer '" + x + "' called with signature 'diii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  fiii: " + debug_table_fiii[x] + "  iiii: " + debug_table_iiii[x] + "  viii: " + debug_table_viii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  i: " + debug_table_i[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  v: " + debug_table_v[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_fiii(x) { err("Invalid function pointer '" + x + "' called with signature 'fiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  diii: " + debug_table_diii[x] + "  iiii: " + debug_table_iiii[x] + "  viii: " + debug_table_viii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  i: " + debug_table_i[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  v: " + debug_table_v[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_i(x) { err("Invalid function pointer '" + x + "' called with signature 'i'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: ii: " + debug_table_ii[x] + "  iii: " + debug_table_iii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  vi: " + debug_table_vi[x] + "  v: " + debug_table_v[x] + "  vii: " + debug_table_vii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_ii(x) { err("Invalid function pointer '" + x + "' called with signature 'ii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: i: " + debug_table_i[x] + "  iii: " + debug_table_iii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  v: " + debug_table_v[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iii(x) { err("Invalid function pointer '" + x + "' called with signature 'iii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: ii: " + debug_table_ii[x] + "  iiii: " + debug_table_iiii[x] + "  i: " + debug_table_i[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  v: " + debug_table_v[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiii: " + debug_table_iiiii[x] + "  i: " + debug_table_i[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiid(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiid'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  i: " + debug_table_i[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  v: " + debug_table_v[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiid(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiid'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  i: " + debug_table_i[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  v: " + debug_table_v[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiiii: " + debug_table_iiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiiii: " + debug_table_iiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_iiiiiiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiiiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiiii: " + debug_table_iiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  "); abort(x) }
-
-function nullFunc_iiiiij(x) { err("Invalid function pointer '" + x + "' called with signature 'iiiiij'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  i: " + debug_table_i[x] + "  jiiii: " + debug_table_jiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  v: " + debug_table_v[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_jiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'jiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: iiii: " + debug_table_iiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiii: " + debug_table_iiiii[x] + "  viiii: " + debug_table_viiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viii: " + debug_table_viii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  viiiii: " + debug_table_viiiii[x] + "  i: " + debug_table_i[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  v: " + debug_table_v[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_v(x) { err("Invalid function pointer '" + x + "' called with signature 'v'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: vi: " + debug_table_vi[x] + "  vii: " + debug_table_vii[x] + "  viii: " + debug_table_viii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  ii: " + debug_table_ii[x] + "  iii: " + debug_table_iii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_vi(x) { err("Invalid function pointer '" + x + "' called with signature 'vi'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: v: " + debug_table_v[x] + "  vii: " + debug_table_vii[x] + "  viii: " + debug_table_viii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  ii: " + debug_table_ii[x] + "  iii: " + debug_table_iii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_vii(x) { err("Invalid function pointer '" + x + "' called with signature 'vii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: vi: " + debug_table_vi[x] + "  viii: " + debug_table_viii[x] + "  v: " + debug_table_v[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viijii: " + debug_table_viijii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iii: " + debug_table_iii[x] + "  i: " + debug_table_i[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_viii(x) { err("Invalid function pointer '" + x + "' called with signature 'viii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  viiii: " + debug_table_viiii[x] + "  v: " + debug_table_v[x] + "  viiiii: " + debug_table_viiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  i: " + debug_table_i[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_viiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viii: " + debug_table_viii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  viiiii: " + debug_table_viiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiii: " + debug_table_iiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  i: " + debug_table_i[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_viiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viii: " + debug_table_viii[x] + "  viiii: " + debug_table_viiii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  jiiii: " + debug_table_jiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_viiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viii: " + debug_table_viii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  jiiii: " + debug_table_jiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  ii: " + debug_table_ii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_viiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viii: " + debug_table_viii[x] + "  viiii: " + debug_table_viiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vi: " + debug_table_vi[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  ii: " + debug_table_ii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  i: " + debug_table_i[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  "); abort(x) }
-
-function nullFunc_viiiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viiii: " + debug_table_viiii[x] + "  viii: " + debug_table_viii[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iii: " + debug_table_iii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  "); abort(x) }
-
-function nullFunc_viiiiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiiiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viiii: " + debug_table_viiii[x] + "  viii: " + debug_table_viii[x] + "  viiiii: " + debug_table_viiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  iii: " + debug_table_iii[x] + "  jiiii: " + debug_table_jiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  "); abort(x) }
-
-function nullFunc_viiiiiiiiiiiiiii(x) { err("Invalid function pointer '" + x + "' called with signature 'viiiiiiiiiiiiiii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: viiii: " + debug_table_viiii[x] + "  viii: " + debug_table_viii[x] + "  viiiii: " + debug_table_viiiii[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  vii: " + debug_table_vii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  vi: " + debug_table_vi[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  v: " + debug_table_v[x] + "  iiiii: " + debug_table_iiiii[x] + "  iiii: " + debug_table_iiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  iii: " + debug_table_iii[x] + "  viijii: " + debug_table_viijii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  ii: " + debug_table_ii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  i: " + debug_table_i[x] + "  "); abort(x) }
-
-function nullFunc_viijii(x) { err("Invalid function pointer '" + x + "' called with signature 'viijii'. Perhaps this is an invalid value (e.g. caused by calling a virtual method on a NULL pointer)? Or calling a function with an incorrect type, which will fail? (it is worth building your source files with -Werror (warnings are errors), as warnings can indicate undefined behavior which can cause this)");  err("This pointer might make sense in another type signature: vii: " + debug_table_vii[x] + "  vi: " + debug_table_vi[x] + "  v: " + debug_table_v[x] + "  viii: " + debug_table_viii[x] + "  viiii: " + debug_table_viiii[x] + "  iiii: " + debug_table_iiii[x] + "  iii: " + debug_table_iii[x] + "  ii: " + debug_table_ii[x] + "  iiiii: " + debug_table_iiiii[x] + "  viiiii: " + debug_table_viiiii[x] + "  diii: " + debug_table_diii[x] + "  fiii: " + debug_table_fiii[x] + "  jiiii: " + debug_table_jiiii[x] + "  iiiiii: " + debug_table_iiiiii[x] + "  iiiiid: " + debug_table_iiiiid[x] + "  viiiiii: " + debug_table_viiiiii[x] + "  iiiiij: " + debug_table_iiiiij[x] + "  i: " + debug_table_i[x] + "  iiiiiid: " + debug_table_iiiiiid[x] + "  iiiiiii: " + debug_table_iiiiiii[x] + "  viiiiiii: " + debug_table_viiiiiii[x] + "  iiiiiiii: " + debug_table_iiiiiiii[x] + "  iiiiiiiii: " + debug_table_iiiiiiiii[x] + "  viiiiiiiiii: " + debug_table_viiiiiiiiii[x] + "  iiiiiiiiiii: " + debug_table_iiiiiiiiiii[x] + "  viiiiiiiiiii: " + debug_table_viiiiiiiiiii[x] + "  iiiiiiiiiiii: " + debug_table_iiiiiiiiiiii[x] + "  iiiiiiiiiiiii: " + debug_table_iiiiiiiiiiiii[x] + "  viiiiiiiiiiiiiii: " + debug_table_viiiiiiiiiiiiiii[x] + "  "); abort(x) }
-
-Module['wasmTableSize'] = 1532;
-
-Module['wasmMaxTableSize'] = 1532;
-
-function invoke_diii(index,a1,a2,a3) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_diii"](index,a1,a2,a3);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_fiii(index,a1,a2,a3) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_fiii"](index,a1,a2,a3);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_i(index) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_i"](index);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_ii(index,a1) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_ii"](index,a1);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iii(index,a1,a2) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iii"](index,a1,a2);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiii(index,a1,a2,a3) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiii"](index,a1,a2,a3);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiii(index,a1,a2,a3,a4) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiii"](index,a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiid(index,a1,a2,a3,a4,a5) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiid"](index,a1,a2,a3,a4,a5);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiii(index,a1,a2,a3,a4,a5) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiii"](index,a1,a2,a3,a4,a5);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiid(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiid"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiii(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiii"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiiii(index,a1,a2,a3,a4,a5,a6,a7) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiiiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_iiiiij(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_iiiiij"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_jiiii(index,a1,a2,a3,a4) {
-  var sp = stackSave();
-  try {
-    return Module["dynCall_jiiii"](index,a1,a2,a3,a4);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_v(index) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_v"](index);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_vi(index,a1) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_vi"](index,a1);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_vii(index,a1,a2) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_vii"](index,a1,a2);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_viii(index,a1,a2,a3) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viii"](index,a1,a2,a3);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
+var debug_table_i = [0,'__ZN6tpm_js9Simulator11IsPoweredOnEv','__ZN6tpm_js9Simulator9IsStartedEv','__ZN6tpm_js9Simulator14IsManufacturedEv','__ZN6tpm_js9Simulator14GetBootCounterEv','__ZN6tpm_js3App3GetEv','__ZN10emscripten8internal15raw_constructorIN6tpm_js13TpmPropertiesEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js19CreatePrimaryResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js12CreateResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js10LoadResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js10SignResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js18NvReadPublicResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js12NvReadResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js11QuoteResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js10AttestInfoEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js12UnsealResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal15raw_constructorIN6tpm_js22StartAuthSessionResultEJEEEPT_DpNS0_11BindingTypeIT0_vE8WireTypeE','__ZN10emscripten8internal12operator_newINSt3__26vectorIhNS2_9allocatorIhEEEEJEEEPT_DpOT0_',0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_ii = [0,'__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE4syncEv','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE9showmanycEv','__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE9underflowEv','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE5uflowEv','_SHA1_Init','_SHA256_Init','_SHA384_Init','_TPM2_Startup','_TPM2_Shutdown','_TPM2_SelfTest','_TPM2_GetTestResult','_TPM2_PolicyRestart','_TPM2_StirRandom','_TPM2_SequenceUpdate','_TPM2_SetCommandCodeAuditStatus','_TPM2_PCR_Extend','_TPM2_PCR_SetAuthPolicy','_TPM2_PCR_SetAuthValue','_TPM2_PCR_Reset','_TPM2_PolicyTicket','_TPM2_PolicyOR','_TPM2_PolicyPCR','_TPM2_PolicyLocality','_TPM2_PolicyNV','_TPM2_PolicyCounterTimer','_TPM2_PolicyCommandCode','_TPM2_PolicyPhysicalPresence','_TPM2_PolicyCpHash','_TPM2_PolicyNameHash','_TPM2_PolicyDuplicationSelect','_TPM2_PolicyAuthorize','_TPM2_PolicyAuthValue','_TPM2_PolicyPassword','_TPM2_PolicyNvWritten','_TPM2_PolicyTemplate','_TPM2_PolicyAuthorizeNV','_TPM2_HierarchyControl','_TPM2_SetPrimaryPolicy','_TPM2_ChangePPS','_TPM2_ChangeEPS','_TPM2_Clear','_TPM2_ClearControl','_TPM2_HierarchyChangeAuth','_TPM2_DictionaryAttackLockReset','_TPM2_DictionaryAttackParameters','_TPM2_PP_Commands','_TPM2_SetAlgorithmSet','_TPM2_FlushContext','_TPM2_EvictControl','_TPM2_ReadClock','_TPM2_ClockSet','_TPM2_ClockRateAdjust','_TPM2_TestParms','_TPM2_NV_DefineSpace','_TPM2_NV_UndefineSpace','_TPM2_NV_UndefineSpaceSpecial','_TPM2_NV_Write','_TPM2_NV_Increment','_TPM2_NV_Extend','_TPM2_NV_SetBits','_TPM2_NV_WriteLock','_TPM2_NV_GlobalWriteLock','_TPM2_NV_ReadLock','_TPM2_NV_ChangeAuth','___stdio_close','__ZNKSt3__217bad_function_call4whatEv','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE9underflowEv','__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE13do_date_orderEv','__ZNKSt3__220__time_get_c_storageIcE7__weeksEv','__ZNKSt3__220__time_get_c_storageIcE8__monthsEv','__ZNKSt3__220__time_get_c_storageIcE7__am_pmEv','__ZNKSt3__220__time_get_c_storageIcE3__cEv','__ZNKSt3__220__time_get_c_storageIcE3__rEv','__ZNKSt3__220__time_get_c_storageIcE3__xEv','__ZNKSt3__220__time_get_c_storageIcE3__XEv','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE13do_date_orderEv','__ZNKSt3__220__time_get_c_storageIwE7__weeksEv','__ZNKSt3__220__time_get_c_storageIwE8__monthsEv','__ZNKSt3__220__time_get_c_storageIwE7__am_pmEv','__ZNKSt3__220__time_get_c_storageIwE3__cEv','__ZNKSt3__220__time_get_c_storageIwE3__rEv','__ZNKSt3__220__time_get_c_storageIwE3__xEv','__ZNKSt3__220__time_get_c_storageIwE3__XEv','__ZNKSt3__210moneypunctIcLb0EE16do_decimal_pointEv','__ZNKSt3__210moneypunctIcLb0EE16do_thousands_sepEv','__ZNKSt3__210moneypunctIcLb0EE14do_frac_digitsEv','__ZNKSt3__210moneypunctIcLb1EE16do_decimal_pointEv','__ZNKSt3__210moneypunctIcLb1EE16do_thousands_sepEv','__ZNKSt3__210moneypunctIcLb1EE14do_frac_digitsEv','__ZNKSt3__210moneypunctIwLb0EE16do_decimal_pointEv','__ZNKSt3__210moneypunctIwLb0EE16do_thousands_sepEv','__ZNKSt3__210moneypunctIwLb0EE14do_frac_digitsEv','__ZNKSt3__210moneypunctIwLb1EE16do_decimal_pointEv','__ZNKSt3__210moneypunctIwLb1EE16do_thousands_sepEv','__ZNKSt3__210moneypunctIwLb1EE14do_frac_digitsEv','__ZNKSt3__27codecvtIDic11__mbstate_tE11do_encodingEv','__ZNKSt3__27codecvtIDic11__mbstate_tE16do_always_noconvEv','__ZNKSt3__27codecvtIDic11__mbstate_tE13do_max_lengthEv','__ZNKSt3__27codecvtIwc11__mbstate_tE11do_encodingEv','__ZNKSt3__27codecvtIwc11__mbstate_tE16do_always_noconvEv','__ZNKSt3__27codecvtIwc11__mbstate_tE13do_max_lengthEv','__ZNKSt3__28numpunctIcE16do_decimal_pointEv','__ZNKSt3__28numpunctIcE16do_thousands_sepEv','__ZNKSt3__28numpunctIwE16do_decimal_pointEv','__ZNKSt3__28numpunctIwE16do_thousands_sepEv','__ZNKSt3__27codecvtIcc11__mbstate_tE11do_encodingEv','__ZNKSt3__27codecvtIcc11__mbstate_tE16do_always_noconvEv','__ZNKSt3__27codecvtIcc11__mbstate_tE13do_max_lengthEv','__ZNKSt3__27codecvtIDsc11__mbstate_tE11do_encodingEv','__ZNKSt3__27codecvtIDsc11__mbstate_tE16do_always_noconvEv','__ZNKSt3__27codecvtIDsc11__mbstate_tE13do_max_lengthEv','__ZNKSt11logic_error4whatEv','__ZN10emscripten8internal13getActualTypeIN6tpm_js3AppEEEPKvPT_','__ZN6tpm_js3App7StartupEv','__ZN6tpm_js3App8ShutdownEv','__ZN6tpm_js3App5ClearEv','__ZN6tpm_js3App8SelfTestEv','__ZN6tpm_js3App25DictionaryAttackLockResetEv','__ZN10emscripten8internal7InvokerIiJEE6invokeEPFivE','__ZN10emscripten8internal7InvokerINSt3__26vectorIhNS2_9allocatorIhEEEEJEE6invokeEPFS6_vE','__ZN10emscripten8internal13getActualTypeINSt3__26vectorIhNS2_9allocatorIhEEEEEEPKvPT_','__ZNKSt3__26vectorIhNS_9allocatorIhEEE4sizeEv','__ZN10emscripten8internal7InvokerIPN6tpm_js3AppEJEE6invokeEPFS4_vE','__ZN10emscripten8internal7InvokerIPNSt3__26vectorIhNS2_9allocatorIhEEEEJEE6invokeEPFS7_vE','_ec_GFp_mont_group_init',0,0];
+var debug_table_iidiiii = [0,'_fmt_fp'];
+var debug_table_iii = [0,'__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE9pbackfailEi','__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE8overflowEi','_SHA1_Final','_SHA256_Final','_SHA384_Final','_TPM2_IncrementalSelfTest','_TPM2_StartAuthSession','_TPM2_Create','_TPM2_Load','_TPM2_LoadExternal','_TPM2_ReadPublic','_TPM2_ActivateCredential','_TPM2_MakeCredential','_TPM2_Unseal','_TPM2_ObjectChangeAuth','_TPM2_CreateLoaded','_TPM2_Duplicate','_TPM2_Rewrap','_TPM2_Import','_TPM2_RSA_Encrypt','_TPM2_RSA_Decrypt','_TPM2_ECDH_KeyGen','_TPM2_ECDH_ZGen','_TPM2_ECC_Parameters','_TPM2_ZGen_2Phase','_TPM2_EncryptDecrypt','_TPM2_EncryptDecrypt2','_TPM2_Hash','_TPM2_HMAC','_TPM2_GetRandom','_TPM2_HMAC_Start','_TPM2_HashSequenceStart','_TPM2_SequenceComplete','_TPM2_EventSequenceComplete','_TPM2_Certify','_TPM2_CertifyCreation','_TPM2_Quote','_TPM2_GetSessionAuditDigest','_TPM2_GetCommandAuditDigest','_TPM2_GetTime','_TPM2_Commit','_TPM2_EC_Ephemeral','_TPM2_VerifySignature','_TPM2_Sign','_TPM2_PCR_Event','_TPM2_PCR_Read','_TPM2_PCR_Allocate','_TPM2_PolicySigned','_TPM2_PolicySecret','_TPM2_PolicyGetDigest','_TPM2_CreatePrimary','_TPM2_ContextSave','_TPM2_ContextLoad','_TPM2_GetCapability','_TPM2_NV_ReadPublic','_TPM2_NV_Read','_TPM2_NV_Certify','_TPM2_Vendor_TCG_Test','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE9pbackfailEi','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE8overflowEi','__ZNKSt3__25ctypeIcE10do_toupperEc','__ZNKSt3__25ctypeIcE10do_tolowerEc','__ZNKSt3__25ctypeIcE8do_widenEc','__ZNKSt3__25ctypeIwE10do_toupperEw','__ZNKSt3__25ctypeIwE10do_tolowerEw','__ZNKSt3__25ctypeIwE8do_widenEc','__ZNK12_GLOBAL__N_116itanium_demangle4Node19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle4Node12hasArraySlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle4Node15hasFunctionSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle4Node13getSyntaxNodeERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ReferenceType19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle11PointerType19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ParameterPack19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ParameterPack12hasArraySlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ParameterPack15hasFunctionSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ParameterPack13getSyntaxNodeERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle24ForwardTemplateReference19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle24ForwardTemplateReference12hasArraySlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle24ForwardTemplateReference15hasFunctionSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle24ForwardTemplateReference13getSyntaxNodeERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle19PointerToMemberType19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9ArrayType19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9ArrayType12hasArraySlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8QualType19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8QualType12hasArraySlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8QualType15hasFunctionSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12FunctionType19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12FunctionType15hasFunctionSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FunctionEncoding19hasRHSComponentSlowERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FunctionEncoding15hasFunctionSlowERNS_12OutputStreamE','__ZN6tpm_js3App13TestHashParamEi','__ZN6tpm_js3App12FlushContextEj','__ZN6tpm_js3App14PolicyPasswordEj','__ZN10emscripten8internal7InvokerINSt3__26vectorIhNS2_9allocatorIhEEEEJiEE6invokeEPFS6_iEi','__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesENSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEE7getWireIS3_EEPNS0_11BindingTypeISA_vEUt_ERKMS3_SA_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEjE7getWireIS3_EEjRKMS3_jRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEjE7getWireIS3_EEjRKMS3_jRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js18NvReadPublicResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEjE7getWireIS3_EEjRKMS3_jRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEiE7getWireIS3_EEiRKMS3_iRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEjE7getWireIS3_EEjRKMS3_jRKT_','__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7getWireIS3_EEPS8_RKMS3_S8_RKT_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFivEiPS3_JEE6invokeERKS5_S6_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_13TpmPropertiesEvES4_PS3_JEE6invokeERKS6_S7_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_19CreatePrimaryResultEvES4_PS3_JEE6invokeERKS6_S7_','__ZN10emscripten8internal13MethodInvokerIMNSt3__26vectorIhNS2_9allocatorIhEEEEKFmvEmPKS6_JEE6invokeERKS8_SA_',0,0,0,0];
+var debug_table_iiii = [0,'__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE6setbufEPcl','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE6xsgetnEPcl','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE6xsputnEPKcl','_SHA1_Update','_memcpy','_SHA256_Update','_SHA384_Update','_TPMI_DH_CONTEXT_Unmarshal','_TPMI_RH_CLEAR_Unmarshal','_TPMI_RH_HIERARCHY_AUTH_Unmarshal','_TPMI_RH_LOCKOUT_Unmarshal','_TPMI_RH_NV_AUTH_Unmarshal','_TPMI_RH_NV_INDEX_Unmarshal','_TPMI_RH_PLATFORM_Unmarshal','_TPMI_RH_PROVISION_Unmarshal','_TPMI_SH_HMAC_Unmarshal','_TPMI_SH_POLICY_Unmarshal','_UINT32_Unmarshal','_TPM2B_DIGEST_Unmarshal','_TPM2B_DATA_Unmarshal','_TPM2B_ECC_PARAMETER_Unmarshal','_TPM2B_ECC_POINT_Unmarshal','_TPM2B_ENCRYPTED_SECRET_Unmarshal','_TPM2B_EVENT_Unmarshal','_TPM2B_ID_OBJECT_Unmarshal','_TPM2B_IV_Unmarshal','_TPM2B_MAX_BUFFER_Unmarshal','_TPM2B_MAX_NV_BUFFER_Unmarshal','_TPM2B_NAME_Unmarshal','_TPM2B_NV_PUBLIC_Unmarshal','_TPM2B_PRIVATE_Unmarshal','_TPM2B_PUBLIC_KEY_RSA_Unmarshal','_TPM2B_SENSITIVE_Unmarshal','_TPM2B_SENSITIVE_CREATE_Unmarshal','_TPM2B_SENSITIVE_DATA_Unmarshal','_TPM2B_TEMPLATE_Unmarshal','_TPM2B_TIMEOUT_Unmarshal','_UINT8_Unmarshal','_TPMI_DH_PERSISTENT_Unmarshal','_TPMI_ECC_CURVE_Unmarshal','_TPMI_YES_NO_Unmarshal','_TPML_ALG_Unmarshal','_TPML_CC_Unmarshal','_TPML_DIGEST_Unmarshal','_TPML_DIGEST_VALUES_Unmarshal','_TPML_PCR_SELECTION_Unmarshal','_TPMS_CONTEXT_Unmarshal','_TPMT_PUBLIC_PARMS_Unmarshal','_TPMT_TK_AUTH_Unmarshal','_TPMT_TK_CREATION_Unmarshal','_TPMT_TK_HASHCHECK_Unmarshal','_TPMT_TK_VERIFIED_Unmarshal','_TPM_CAP_Unmarshal','_TPM_CLOCK_ADJUST_Unmarshal','_TPM_EO_Unmarshal','_TPM_SE_Unmarshal','_TPM_SU_Unmarshal','_UINT16_Unmarshal','_UINT64_Unmarshal','_UINT32_Marshal','_TPM2B_ATTEST_Marshal','_TPM2B_CREATION_DATA_Marshal','_TPM2B_DATA_Marshal','_TPM2B_DIGEST_Marshal','_TPM2B_ECC_POINT_Marshal','_TPM2B_ENCRYPTED_SECRET_Marshal','_TPM2B_ID_OBJECT_Marshal','_TPM2B_IV_Marshal','_TPM2B_MAX_BUFFER_Marshal','_TPM2B_MAX_NV_BUFFER_Marshal','_TPM2B_NAME_Marshal','_TPM2B_NV_PUBLIC_Marshal','_TPM2B_PRIVATE_Marshal','_TPM2B_PUBLIC_Marshal','_TPM2B_PUBLIC_KEY_RSA_Marshal','_TPM2B_SENSITIVE_DATA_Marshal','_TPM2B_TIMEOUT_Marshal','_UINT8_Marshal','_TPML_ALG_Marshal','_TPML_DIGEST_Marshal','_TPML_DIGEST_VALUES_Marshal','_TPML_PCR_SELECTION_Marshal','_TPMS_ALGORITHM_DETAIL_ECC_Marshal','_TPMS_CAPABILITY_DATA_Marshal','_TPMS_CONTEXT_Marshal','_TPMS_TIME_INFO_Marshal','_TPMT_HA_Marshal','_TPMT_SIGNATURE_Marshal','_TPMT_TK_AUTH_Marshal','_TPMT_TK_CREATION_Marshal','_TPMT_TK_HASHCHECK_Marshal','_TPMT_TK_VERIFIED_Marshal','_UINT16_Marshal','___stdout_write','___stdio_write','_sn_write','__ZNKSt3__27collateIcE7do_hashEPKcS3_','__ZNKSt3__27collateIwE7do_hashEPKwS3_','__ZNKSt3__28messagesIcE7do_openERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERKNS_6localeE','__ZNKSt3__28messagesIwE7do_openERKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEERKNS_6localeE','__ZNKSt3__25ctypeIcE10do_toupperEPcPKc','__ZNKSt3__25ctypeIcE10do_tolowerEPcPKc','__ZNKSt3__25ctypeIcE9do_narrowEcc','__ZNKSt3__25ctypeIwE5do_isEtw','__ZNKSt3__25ctypeIwE10do_toupperEPwPKw','__ZNKSt3__25ctypeIwE10do_tolowerEPwPKw','__ZNKSt3__25ctypeIwE9do_narrowEwc','__ZNK10__cxxabiv117__class_type_info9can_catchEPKNS_16__shim_type_infoERPv','__ZNK10__cxxabiv123__fundamental_type_info9can_catchEPKNS_16__shim_type_infoERPv','__ZNK10__cxxabiv119__pointer_type_info9can_catchEPKNS_16__shim_type_infoERPv','__ZNK10__cxxabiv120__function_type_info9can_catchEPKNS_16__shim_type_infoERPv','__ZN6tpm_js3App9ExtendPcrEiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE','__ZN6tpm_js3App13NvDefineSpaceEjm','__ZN6tpm_js3App7NvWriteEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN6tpm_js3App19HierarchyChangeAuthEiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE','__ZN6tpm_js3App9PolicyPCREjRKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN10emscripten8internal12VectorAccessINSt3__26vectorIhNS2_9allocatorIhEEEEE3setERS6_mRKh','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNSt3__26vectorIhNS4_9allocatorIhEEEEiES8_PS3_JiEE6invokeERKSA_SB_i','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFiiEiPS3_JiEE6invokeERKS5_S6_i','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijEiPS3_JjEE6invokeERKS5_S6_j','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_18NvReadPublicResultEjES4_PS3_JjEE6invokeERKS6_S7_j','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_10AttestInfoERKNSt3__26vectorIhNS5_9allocatorIhEEEEES4_PS3_JSB_EE6invokeERKSD_SE_PS9_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_12UnsealResultEjES4_PS3_JjEE6invokeERKS6_S7_j','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_22StartAuthSessionResultEbES4_PS3_JbEE6invokeERKS6_S7_b','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNSt3__26vectorIhNS4_9allocatorIhEEEEjES8_PS3_JjEE6invokeERKSA_SB_j','__ZN10emscripten8internal15FunctionInvokerIPFNS_3valERKNSt3__26vectorIhNS3_9allocatorIhEEEEmES2_S9_JmEE6invokeEPSB_PS7_m','__ZN6tpm_js10TssAdapter18SendCommandWrapperEP29TSS2_TCTI_OPAQUE_CONTEXT_BLOBmPKh','_BN_add','_BN_sub','_ec_GFp_mont_bignum_to_felem','_ec_GFp_mont_felem_to_bignum','_ec_GFp_simple_mont_inv_mod_ord_vartime','_ec_GFp_mont_cmp_x_coordinate','___stdio_read','_do_read_610',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_iiiii = [0,'_TPMI_DH_ENTITY_Unmarshal','_TPMI_DH_OBJECT_Unmarshal','_TPMI_DH_PARENT_Unmarshal','_TPMI_DH_PCR_Unmarshal','_TPMI_RH_ENDORSEMENT_Unmarshal','_TPMI_RH_HIERARCHY_Unmarshal','_TPM2B_PUBLIC_Unmarshal','_TPMI_ALG_CIPHER_MODE_Unmarshal','_TPMI_ALG_HASH_Unmarshal','_TPMI_ALG_MAC_SCHEME_Unmarshal','_TPMI_ECC_KEY_EXCHANGE_Unmarshal','_TPMI_RH_ENABLES_Unmarshal','_TPMT_RSA_DECRYPT_Unmarshal','_TPMT_SIGNATURE_Unmarshal','_TPMT_SIG_SCHEME_Unmarshal','_TPMT_SYM_DEF_Unmarshal','_TPMT_SYM_DEF_OBJECT_Unmarshal','__ZNKSt3__25ctypeIcE8do_widenEPKcS3_Pc','__ZNKSt3__25ctypeIwE5do_isEPKwS3_Pt','__ZNKSt3__25ctypeIwE10do_scan_isEtPKwS3_','__ZNKSt3__25ctypeIwE11do_scan_notEtPKwS3_','__ZNKSt3__25ctypeIwE8do_widenEPKcS3_Pw','__ZN6tpm_js3App15VerifySignatureEjRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEERKNS_10SignResultE','__ZN6tpm_js3App12EvictControlEjjj','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFiiRKNSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEEiPS3_JiSC_EE6invokeERKSE_SF_iPNS0_11BindingTypeISA_vEUt_E','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNSt3__26vectorIhNS4_9allocatorIhEEEEjRKS8_ES8_PS3_JjSA_EE6invokeERKSC_SD_jPS8_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijmEiPS3_JjmEE6invokeERKS5_S6_jm','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijRKNSt3__26vectorIhNS4_9allocatorIhEEEEEiPS3_JjSA_EE6invokeERKSC_SD_jPS8_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_11QuoteResultEjRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEEES4_PS3_JjSD_EE6invokeERKSF_SG_jPNS0_11BindingTypeISB_vEUt_E','__ZN10emscripten8internal15FunctionInvokerIPFbRNSt3__26vectorIhNS2_9allocatorIhEEEEmRKhEbS7_JmS9_EE6invokeEPSB_PS6_mh','__emval_call','__ZN6tpm_js10TssAdapter22ReceiveResponseWrapperEP29TSS2_TCTI_OPAQUE_CONTEXT_BLOBPmPhi','_ec_GFp_mont_point_get_affine_coordinates',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_iiiiid = [0,'__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcd','__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEce','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwd','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwe',0,0,0];
+var debug_table_iiiiii = [0,'__ZNKSt3__27collateIcE10do_compareEPKcS3_S3_S3_','__ZNKSt3__27collateIwE10do_compareEPKwS3_S3_S3_','__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcb','__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcl','__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcm','__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcPKv','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwb','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwl','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwm','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwPKv','__ZNKSt3__27codecvtIDic11__mbstate_tE10do_unshiftERS1_PcS4_RS4_','__ZNKSt3__27codecvtIDic11__mbstate_tE9do_lengthERS1_PKcS5_m','__ZNKSt3__27codecvtIwc11__mbstate_tE10do_unshiftERS1_PcS4_RS4_','__ZNKSt3__27codecvtIwc11__mbstate_tE9do_lengthERS1_PKcS5_m','__ZNKSt3__25ctypeIcE9do_narrowEPKcS3_cPc','__ZNKSt3__25ctypeIwE9do_narrowEPKwS3_cPc','__ZNKSt3__27codecvtIcc11__mbstate_tE10do_unshiftERS1_PcS4_RS4_','__ZNKSt3__27codecvtIcc11__mbstate_tE9do_lengthERS1_PKcS5_m','__ZNKSt3__27codecvtIDsc11__mbstate_tE10do_unshiftERS1_PcS4_RS4_','__ZNKSt3__27codecvtIDsc11__mbstate_tE9do_lengthERS1_PKcS5_m','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_10LoadResultEjRKNSt3__26vectorIhNS5_9allocatorIhEEEESB_ES4_PS3_JjSB_SB_EE6invokeERKSD_SE_jPS9_SI_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_10SignResultEjiRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEEES4_PS3_JjiSD_EE6invokeERKSF_SG_jiPNS0_11BindingTypeISB_vEUt_E','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijRKNSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEERKNS2_10SignResultEEiPS3_JjSC_SF_EE6invokeERKSH_SI_jPNS0_11BindingTypeISA_vEUt_EPSD_','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFijjjEiPS3_JjjjEE6invokeERKS5_S6_jjj','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_12NvReadResultEjiiES4_PS3_JjiiEE6invokeERKS6_S7_jii','_ec_GFp_mont_group_set_curve',0,0,0,0,0];
+var debug_table_iiiiiid = [0,'__ZNKSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_bRNS_8ios_baseEce','__ZNKSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_bRNS_8ios_baseEwe',0];
+var debug_table_iiiiiii = [0,'__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRb','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRl','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRx','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRt','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjS8_','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRm','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRy','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRf','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRd','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRe','__ZNKSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjRPv','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRb','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRl','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRx','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRt','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjS8_','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRm','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRy','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRf','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRd','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRe','__ZNKSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjRPv','__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE11do_get_timeES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE11do_get_dateES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE14do_get_weekdayES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE16do_get_monthnameES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE11do_get_yearES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE11do_get_timeES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE11do_get_dateES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE14do_get_weekdayES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE16do_get_monthnameES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE11do_get_yearES4_S4_RNS_8ios_baseERjP2tm','__ZNKSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_bRNS_8ios_baseEcRKNS_12basic_stringIcS3_NS_9allocatorIcEEEE','__ZNKSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_bRNS_8ios_baseEwRKNS_12basic_stringIwS3_NS_9allocatorIwEEEE',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_iiiiiiii = [0,'__ZNKSt3__28time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcPK2tmcc','__ZNKSt3__28time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwPK2tmcc','__ZNKSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_bRNS_8ios_baseERjRe','__ZNKSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_bRNS_8ios_baseERjRNS_12basic_stringIcS3_NS_9allocatorIcEEEE','__ZNKSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_bRNS_8ios_baseERjRe','__ZNKSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_bRNS_8ios_baseERjRNS_12basic_stringIwS3_NS_9allocatorIwEEEE',0];
+var debug_table_iiiiiiiii = [0,'__ZNKSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_getES4_S4_RNS_8ios_baseERjP2tmcc','__ZNKSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_getES4_S4_RNS_8ios_baseERjP2tmcc','__ZNKSt3__27codecvtIDic11__mbstate_tE6do_outERS1_PKDiS5_RS5_PcS7_RS7_','__ZNKSt3__27codecvtIDic11__mbstate_tE5do_inERS1_PKcS5_RS5_PDiS7_RS7_','__ZNKSt3__27codecvtIwc11__mbstate_tE6do_outERS1_PKwS5_RS5_PcS7_RS7_','__ZNKSt3__27codecvtIwc11__mbstate_tE5do_inERS1_PKcS5_RS5_PwS7_RS7_','__ZNKSt3__27codecvtIcc11__mbstate_tE6do_outERS1_PKcS5_RS5_PcS7_RS7_','__ZNKSt3__27codecvtIcc11__mbstate_tE5do_inERS1_PKcS5_RS5_PcS7_RS7_','__ZNKSt3__27codecvtIDsc11__mbstate_tE6do_outERS1_PKDsS5_RS5_PcS7_RS7_','__ZNKSt3__27codecvtIDsc11__mbstate_tE5do_inERS1_PKcS5_RS5_PDsS7_RS7_',0,0,0,0,0];
+var debug_table_iiiiiiiiiii = [0,'__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_12CreateResultEjiiiiRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEESD_RKNS5_6vectorIhNS9_IhEEEEES4_PS3_JjiiiiSD_SD_SI_EE6invokeERKSK_SL_jiiiiPNS0_11BindingTypeISB_vEUt_ESS_PSG_'];
+var debug_table_iiiiiiiiiiii = [0,'__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFNS2_19CreatePrimaryResultEiiiiiRKNSt3__212basic_stringIcNS5_11char_traitsIcEENS5_9allocatorIcEEEESD_SD_RKNS5_6vectorIhNS9_IhEEEEES4_PS3_JiiiiiSD_SD_SD_SI_EE6invokeERKSK_SL_iiiiiPNS0_11BindingTypeISB_vEUt_ESS_SS_PSG_'];
+var debug_table_iiiiij = [0,'__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcx','__ZNKSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEE6do_putES4_RNS_8ios_baseEcy','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwx','__ZNKSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEE6do_putES4_RNS_8ios_baseEwy',0,0,0];
+var debug_table_jiji = [0,'___stdio_seek'];
+var debug_table_v = [0,'___cxa_pure_virtual','__ZN6tpm_js9Simulator7PowerOnEv','__ZN6tpm_js9Simulator8PowerOffEv','__ZN6tpm_js9Simulator16ManufactureResetEv','_BN_value_one_init','_init_once','_EVP_sha256_init','_EC_GFp_mont_method_init','_thread_local_init','__ZL28demangling_terminate_handlerv',0,0,0,0,0];
+var debug_table_vi = [0,'__ZNSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev','__ZNSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev','__ZThn8_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev','__ZThn8_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev','__ZTv0_n12_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED1Ev','__ZTv0_n12_NSt3__218basic_stringstreamIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev','__ZNSt3__213basic_istreamIcNS_11char_traitsIcEEED1Ev','__ZNSt3__213basic_istreamIcNS_11char_traitsIcEEED0Ev','__ZTv0_n12_NSt3__213basic_istreamIcNS_11char_traitsIcEEED1Ev','__ZTv0_n12_NSt3__213basic_istreamIcNS_11char_traitsIcEEED0Ev','__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEED2Ev','__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEED0Ev','__ZNSt3__214basic_iostreamIcNS_11char_traitsIcEEED1Ev','__ZNSt3__214basic_iostreamIcNS_11char_traitsIcEEED0Ev','__ZThn8_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED1Ev','__ZThn8_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED0Ev','__ZTv0_n12_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED1Ev','__ZTv0_n12_NSt3__214basic_iostreamIcNS_11char_traitsIcEEED0Ev','__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEED1Ev','__ZNSt3__213basic_ostreamIcNS_11char_traitsIcEEED0Ev','__ZTv0_n12_NSt3__213basic_ostreamIcNS_11char_traitsIcEEED1Ev','__ZTv0_n12_NSt3__213basic_ostreamIcNS_11char_traitsIcEEED0Ev','__ZNSt3__217bad_function_callD2Ev','__ZNSt3__217bad_function_callD0Ev','__ZNSt3__28ios_baseD2Ev','__ZNSt3__28ios_baseD0Ev','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEED2Ev','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEED0Ev','__ZNSt3__27collateIcED2Ev','__ZNSt3__27collateIcED0Ev','__ZNSt3__26locale5facet16__on_zero_sharedEv','__ZNSt3__27collateIwED2Ev','__ZNSt3__27collateIwED0Ev','__ZNSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev','__ZNSt3__27num_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev','__ZNSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev','__ZNSt3__27num_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev','__ZNSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev','__ZNSt3__27num_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev','__ZNSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev','__ZNSt3__27num_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev','__ZNSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev','__ZNSt3__28time_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev','__ZNSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev','__ZNSt3__28time_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev','__ZNSt3__28time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev','__ZNSt3__28time_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev','__ZNSt3__28time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev','__ZNSt3__28time_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev','__ZNSt3__210moneypunctIcLb0EED2Ev','__ZNSt3__210moneypunctIcLb0EED0Ev','__ZNSt3__210moneypunctIcLb1EED2Ev','__ZNSt3__210moneypunctIcLb1EED0Ev','__ZNSt3__210moneypunctIwLb0EED2Ev','__ZNSt3__210moneypunctIwLb0EED0Ev','__ZNSt3__210moneypunctIwLb1EED2Ev','__ZNSt3__210moneypunctIwLb1EED0Ev','__ZNSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev','__ZNSt3__29money_getIcNS_19istreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev','__ZNSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev','__ZNSt3__29money_getIwNS_19istreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev','__ZNSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED2Ev','__ZNSt3__29money_putIcNS_19ostreambuf_iteratorIcNS_11char_traitsIcEEEEED0Ev','__ZNSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED2Ev','__ZNSt3__29money_putIwNS_19ostreambuf_iteratorIwNS_11char_traitsIwEEEEED0Ev','__ZNSt3__28messagesIcED2Ev','__ZNSt3__28messagesIcED0Ev','__ZNSt3__28messagesIwED2Ev','__ZNSt3__28messagesIwED0Ev','__ZNSt3__26locale5facetD2Ev','__ZNSt3__216__narrow_to_utf8ILm32EED0Ev','__ZNSt3__217__widen_from_utf8ILm32EED0Ev','__ZNSt3__27codecvtIwc11__mbstate_tED2Ev','__ZNSt3__27codecvtIwc11__mbstate_tED0Ev','__ZNSt3__26locale5__impD2Ev','__ZNSt3__26locale5__impD0Ev','__ZNSt3__25ctypeIcED2Ev','__ZNSt3__25ctypeIcED0Ev','__ZNSt3__28numpunctIcED2Ev','__ZNSt3__28numpunctIcED0Ev','__ZNSt3__28numpunctIwED2Ev','__ZNSt3__28numpunctIwED0Ev','__ZNSt3__26locale5facetD0Ev','__ZNSt3__25ctypeIwED0Ev','__ZNSt3__27codecvtIcc11__mbstate_tED0Ev','__ZNSt3__27codecvtIDsc11__mbstate_tED0Ev','__ZNSt3__27codecvtIDic11__mbstate_tED0Ev','__ZN10__cxxabiv116__shim_type_infoD2Ev','__ZN10__cxxabiv117__class_type_infoD0Ev','__ZNK10__cxxabiv116__shim_type_info5noop1Ev','__ZNK10__cxxabiv116__shim_type_info5noop2Ev','__ZN10__cxxabiv120__si_class_type_infoD0Ev','__ZN12_GLOBAL__N_116itanium_demangle4NodeD2Ev','__ZN12_GLOBAL__N_116itanium_demangle10AbiTagAttrD0Ev','__ZN12_GLOBAL__N_116itanium_demangle4NodeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle19SpecialSubstitutionD0Ev','__ZN12_GLOBAL__N_116itanium_demangle20PostfixQualifiedTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13ReferenceTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle11PointerTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle20NameWithTemplateArgsD0Ev','__ZN12_GLOBAL__N_116itanium_demangle12TemplateArgsD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13ParameterPackD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15IntegerCastExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle16FloatLiteralImplIeED0Ev','__ZN12_GLOBAL__N_116itanium_demangle16FloatLiteralImplIdED0Ev','__ZN12_GLOBAL__N_116itanium_demangle16FloatLiteralImplIfED0Ev','__ZN12_GLOBAL__N_116itanium_demangle8BoolExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle14IntegerLiteralD0Ev','__ZN12_GLOBAL__N_116itanium_demangle20TemplateArgumentPackD0Ev','__ZN12_GLOBAL__N_116itanium_demangle9ThrowExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle12InitListExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13NodeArrayNodeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13EnclosingExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle19SizeofParamPackExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle22ParameterPackExpansionD0Ev','__ZN12_GLOBAL__N_116itanium_demangle8CastExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15ConditionalExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle7NewExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle11PostfixExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15BracedRangeExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10BracedExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle8NameTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle18ArraySubscriptExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10MemberExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle19GlobalQualifiedNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15LiteralOperatorD0Ev','__ZN12_GLOBAL__N_116itanium_demangle22ConversionOperatorTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle8DtorNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13QualifiedNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10DeleteExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle14ConversionExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle8CallExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10PrefixExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10BinaryExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle8FoldExprD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13FunctionParamD0Ev','__ZN12_GLOBAL__N_116itanium_demangle24ForwardTemplateReferenceD0Ev','__ZN12_GLOBAL__N_116itanium_demangle22ElaboratedTypeSpefTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle16StdQualifiedNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle21StructuredBindingNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15ClosureTypeNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15UnnamedTypeNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle9LocalNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle12CtorDtorNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle27ExpandedSpecialSubstitutionD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10NestedNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle19PointerToMemberTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle9ArrayTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle10VectorTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle15PixelVectorTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle8QualTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle17VendorExtQualTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle13ObjCProtoNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle12FunctionTypeD0Ev','__ZN12_GLOBAL__N_116itanium_demangle20DynamicExceptionSpecD0Ev','__ZN12_GLOBAL__N_116itanium_demangle12NoexceptSpecD0Ev','__ZN12_GLOBAL__N_116itanium_demangle11SpecialNameD0Ev','__ZN12_GLOBAL__N_116itanium_demangle9DotSuffixD0Ev','__ZN12_GLOBAL__N_116itanium_demangle16FunctionEncodingD0Ev','__ZN12_GLOBAL__N_116itanium_demangle12EnableIfAttrD0Ev','__ZN12_GLOBAL__N_116itanium_demangle21CtorVtableSpecialNameD0Ev','__ZNSt11logic_errorD2Ev','__ZNSt11logic_errorD0Ev','__ZNSt12length_errorD0Ev','__ZN10__cxxabiv123__fundamental_type_infoD0Ev','__ZN10__cxxabiv119__pointer_type_infoD0Ev','__ZN10__cxxabiv120__function_type_infoD0Ev','__ZN10__cxxabiv121__vmi_class_type_infoD0Ev','__ZN6tpm_js9Simulator18GetEndorsementSeedEv','__ZN6tpm_js9Simulator15GetPlatformSeedEv','__ZN6tpm_js9Simulator12GetOwnerSeedEv','__ZN6tpm_js9Simulator11GetNullSeedEv','__ZN10emscripten8internal14raw_destructorIN6tpm_js3AppEEEvPT_','__ZN10emscripten8internal7InvokerIvJEE6invokeEPFvvE','__ZN10emscripten8internal14raw_destructorIN6tpm_js13TpmPropertiesEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js19CreatePrimaryResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js12CreateResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js10LoadResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js10SignResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js18NvReadPublicResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js12NvReadResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js11QuoteResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js10AttestInfoEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js12UnsealResultEEEvPT_','__ZN10emscripten8internal14raw_destructorIN6tpm_js22StartAuthSessionResultEEEvPT_','__ZN10emscripten8internal14raw_destructorINSt3__26vectorIhNS2_9allocatorIhEEEEEEvPT_','_BN_free','_rand_thread_state_free','_sha256_init','_ec_GFp_mont_group_finish','_err_state_free','_thread_local_destructor','__ZNSt3__26locale2id6__initEv','__ZNSt3__217__call_once_proxyINS_5tupleIJONS_12_GLOBAL__N_111__fake_bindEEEEEEvPv','__ZNSt3__212__do_nothingEPv','_free',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_vii = [0,'__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE5imbueERKNS_6localeE','__ZNKSt3__210moneypunctIcLb0EE11do_groupingEv','__ZNKSt3__210moneypunctIcLb0EE14do_curr_symbolEv','__ZNKSt3__210moneypunctIcLb0EE16do_positive_signEv','__ZNKSt3__210moneypunctIcLb0EE16do_negative_signEv','__ZNKSt3__210moneypunctIcLb0EE13do_pos_formatEv','__ZNKSt3__210moneypunctIcLb0EE13do_neg_formatEv','__ZNKSt3__210moneypunctIcLb1EE11do_groupingEv','__ZNKSt3__210moneypunctIcLb1EE14do_curr_symbolEv','__ZNKSt3__210moneypunctIcLb1EE16do_positive_signEv','__ZNKSt3__210moneypunctIcLb1EE16do_negative_signEv','__ZNKSt3__210moneypunctIcLb1EE13do_pos_formatEv','__ZNKSt3__210moneypunctIcLb1EE13do_neg_formatEv','__ZNKSt3__210moneypunctIwLb0EE11do_groupingEv','__ZNKSt3__210moneypunctIwLb0EE14do_curr_symbolEv','__ZNKSt3__210moneypunctIwLb0EE16do_positive_signEv','__ZNKSt3__210moneypunctIwLb0EE16do_negative_signEv','__ZNKSt3__210moneypunctIwLb0EE13do_pos_formatEv','__ZNKSt3__210moneypunctIwLb0EE13do_neg_formatEv','__ZNKSt3__210moneypunctIwLb1EE11do_groupingEv','__ZNKSt3__210moneypunctIwLb1EE14do_curr_symbolEv','__ZNKSt3__210moneypunctIwLb1EE16do_positive_signEv','__ZNKSt3__210moneypunctIwLb1EE16do_negative_signEv','__ZNKSt3__210moneypunctIwLb1EE13do_pos_formatEv','__ZNKSt3__210moneypunctIwLb1EE13do_neg_formatEv','__ZNKSt3__28messagesIcE8do_closeEl','__ZNKSt3__28messagesIwE8do_closeEl','__ZNKSt3__28numpunctIcE11do_groupingEv','__ZNKSt3__28numpunctIcE11do_truenameEv','__ZNKSt3__28numpunctIcE12do_falsenameEv','__ZNKSt3__28numpunctIwE11do_groupingEv','__ZNKSt3__28numpunctIwE11do_truenameEv','__ZNKSt3__28numpunctIwE12do_falsenameEv','__ZNK12_GLOBAL__N_116itanium_demangle10AbiTagAttr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle4Node10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle4Node11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle19SpecialSubstitution9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle19SpecialSubstitution11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle20PostfixQualifiedType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ReferenceType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ReferenceType10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle11PointerType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle11PointerType10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle20NameWithTemplateArgs9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle20NameWithTemplateArgs11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle12TemplateArgs9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ParameterPack9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ParameterPack10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle15IntegerCastExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FloatLiteralImplIeE9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FloatLiteralImplIdE9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FloatLiteralImplIfE9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8BoolExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle14IntegerLiteral9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle20TemplateArgumentPack9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9ThrowExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12InitListExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13NodeArrayNode9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13EnclosingExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle19SizeofParamPackExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle22ParameterPackExpansion9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8CastExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle15ConditionalExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle7NewExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle11PostfixExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle15BracedRangeExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle10BracedExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8NameType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8NameType11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle18ArraySubscriptExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle10MemberExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle19GlobalQualifiedName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle19GlobalQualifiedName11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle15LiteralOperator9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle22ConversionOperatorType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8DtorName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13QualifiedName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13QualifiedName11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle10DeleteExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle14ConversionExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8CallExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle10PrefixExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle10BinaryExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8FoldExpr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13FunctionParam9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle24ForwardTemplateReference9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle24ForwardTemplateReference10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle22ElaboratedTypeSpefType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16StdQualifiedName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16StdQualifiedName11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle21StructuredBindingName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle15ClosureTypeName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle15UnnamedTypeName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9LocalName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12CtorDtorName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle27ExpandedSpecialSubstitution9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle27ExpandedSpecialSubstitution11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle10NestedName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle10NestedName11getBaseNameEv','__ZNK12_GLOBAL__N_116itanium_demangle19PointerToMemberType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle19PointerToMemberType10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9ArrayType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9ArrayType10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle10VectorType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle15PixelVectorType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8QualType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle8QualType10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle17VendorExtQualType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle13ObjCProtoName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12FunctionType9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12FunctionType10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle20DynamicExceptionSpec9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12NoexceptSpec9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle11SpecialName9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle9DotSuffix9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FunctionEncoding9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle16FunctionEncoding10printRightERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle12EnableIfAttr9printLeftERNS_12OutputStreamE','__ZNK12_GLOBAL__N_116itanium_demangle21CtorVtableSpecialName9printLeftERNS_12OutputStreamE','__ZN6tpm_js9Simulator6GetPcrEi','__ZN6tpm_js3App16GetTpmPropertiesEv','__ZN6tpm_js3App27CreatePrimaryEndorsementKeyEv','__ZN6tpm_js3App15SetAuthPasswordERKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE','__ZN6tpm_js3App16SetSessionHandleEj','__ZNSt3__26vectorIhNS_9allocatorIhEEE9push_backERKh','__ZN6tpm_js9Simulator14ExecuteCommandERKNSt3__26vectorIhNS1_9allocatorIhEEEE','_sk_BIGNUM_call_free_func','_gcm_gmult_4bit','_sha256_final','_pop_arg_long_double',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_viii = [0,'__ZN6tpm_js3App9GetRandomEi','__ZN6tpm_js3App12NvReadPublicEj','__ZN6tpm_js3App21UnmarshalAttestBufferERKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN6tpm_js3App6UnsealEj','__ZN6tpm_js3App16StartAuthSessionEb','__ZN6tpm_js3App15PolicyGetDigestEj','__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js13TpmPropertiesENSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEE7setWireIS3_EEvRKMS3_SA_RT_PNS0_11BindingTypeISA_vEUt_E','__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultEjE7setWireIS3_EEvRKMS3_jRT_j','__ZN10emscripten8internal12MemberAccessIN6tpm_js19CreatePrimaryResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js12CreateResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultEjE7setWireIS3_EEvRKMS3_jRT_j','__ZN10emscripten8internal12MemberAccessIN6tpm_js10LoadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js10SignResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js18NvReadPublicResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js12NvReadResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js11QuoteResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoEjE7setWireIS3_EEvRKMS3_jRT_j','__ZN10emscripten8internal12MemberAccessIN6tpm_js10AttestInfoENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js12UnsealResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEiE7setWireIS3_EEvRKMS3_iRT_i','__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultEjE7setWireIS3_EEvRKMS3_jRT_j','__ZN10emscripten8internal12MemberAccessIN6tpm_js22StartAuthSessionResultENSt3__26vectorIhNS4_9allocatorIhEEEEE7setWireIS3_EEvRKMS3_S8_RT_PS8_','__ZNSt3__26vectorIhNS_9allocatorIhEEE6resizeEmRKh','__ZN10emscripten8internal12VectorAccessINSt3__26vectorIhNS2_9allocatorIhEEEEE3getERKS6_m','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFvRKNSt3__212basic_stringIcNS4_11char_traitsIcEENS4_9allocatorIcEEEEEvPS3_JSC_EE6invokeERKSE_SF_PNS0_11BindingTypeISA_vEUt_E','__ZN10emscripten8internal13MethodInvokerIMN6tpm_js3AppEFvjEvPS3_JjEE6invokeERKS5_S6_j','__ZN10emscripten8internal13MethodInvokerIMNSt3__26vectorIhNS2_9allocatorIhEEEEFvRKhEvPS6_JS8_EE6invokeERKSA_SB_h','__ZNSt3__210__function16__policy_invokerIFNS_6vectorIhNS_9allocatorIhEEEERKS5_EE12__call_emptyEPKNS0_16__policy_storageES7_','__ZNSt3__210__function16__policy_invokerIFNS_6vectorIhNS_9allocatorIhEEEERKS5_EE11__call_implINS0_12__alloc_funcIPS8_NS3_ISC_EES8_EEEES5_PKNS0_16__policy_storageES7_','_AES_decrypt','_AES_encrypt','_aes_nohw_encrypt','_sha256_update','_ec_GFp_mont_dbl','_ec_GFp_mont_mul_base','_ec_GFp_mont_felem_sqr','_ec_simple_scalar_inv_montgomery',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_viiii = [0,'__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE7seekposENS_4fposI11__mbstate_tEEj','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE7seekposENS_4fposI11__mbstate_tEEj','__ZNKSt3__27collateIcE12do_transformEPKcS3_','__ZNKSt3__27collateIwE12do_transformEPKwS3_','__ZNK10__cxxabiv117__class_type_info27has_unambiguous_public_baseEPNS_19__dynamic_cast_infoEPvi','__ZNK10__cxxabiv120__si_class_type_info27has_unambiguous_public_baseEPNS_19__dynamic_cast_infoEPvi','__ZNK10__cxxabiv121__vmi_class_type_info27has_unambiguous_public_baseEPNS_19__dynamic_cast_infoEPvi','__ZN6tpm_js3App7EncryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN6tpm_js3App7DecryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN6tpm_js3App10RSAEncryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN6tpm_js3App10RSADecryptEjRKNSt3__26vectorIhNS1_9allocatorIhEEEE','__ZN6tpm_js3App5QuoteEjRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE','__ZN10emscripten8internal13MethodInvokerIMNSt3__26vectorIhNS2_9allocatorIhEEEEFvmRKhEvPS6_JmS8_EE6invokeERKSA_SB_mh','_ExecuteCommand','_gcm_ghash_4bit','_ec_GFp_mont_add','_ec_GFp_mont_mul','_ec_GFp_mont_felem_mul',0,0,0,0,0,0,0,0,0,0,0,0,0];
+var debug_table_viiiii = [0,'__ZNK10__cxxabiv117__class_type_info16search_below_dstEPNS_19__dynamic_cast_infoEPKvib','__ZNK10__cxxabiv120__si_class_type_info16search_below_dstEPNS_19__dynamic_cast_infoEPKvib','__ZNK10__cxxabiv121__vmi_class_type_info16search_below_dstEPNS_19__dynamic_cast_infoEPKvib','__ZN6tpm_js3App4LoadEjRKNSt3__26vectorIhNS1_9allocatorIhEEEES7_','__ZN6tpm_js3App4SignEjiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEE','__ZN6tpm_js3App6NvReadEjii','_ec_GFp_mont_mul_public'];
+var debug_table_viiiiii = [0,'__ZNKSt3__28messagesIcE6do_getEliiRKNS_12basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEE','__ZNKSt3__28messagesIwE6do_getEliiRKNS_12basic_stringIwNS_11char_traitsIwEENS_9allocatorIwEEEE','__ZNK10__cxxabiv117__class_type_info16search_above_dstEPNS_19__dynamic_cast_infoEPKvS4_ib','__ZNK10__cxxabiv120__si_class_type_info16search_above_dstEPNS_19__dynamic_cast_infoEPKvS4_ib','__ZNK10__cxxabiv121__vmi_class_type_info16search_above_dstEPNS_19__dynamic_cast_infoEPKvS4_ib',0,0];
+var debug_table_viiiiiiiiii = [0,'__ZN6tpm_js3App6CreateEjiiiiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_RKNS1_6vectorIhNS5_IhEEEE'];
+var debug_table_viiiiiiiiiii = [0,'__ZN6tpm_js3App13CreatePrimaryEiiiiiRKNSt3__212basic_stringIcNS1_11char_traitsIcEENS1_9allocatorIcEEEES9_S9_RKNS1_6vectorIhNS5_IhEEEE'];
+var debug_table_viijii = [0,'__ZNSt3__215basic_stringbufIcNS_11char_traitsIcEENS_9allocatorIcEEE7seekoffExNS_8ios_base7seekdirEj','__ZNSt3__215basic_streambufIcNS_11char_traitsIcEEE7seekoffExNS_8ios_base7seekdirEj',0];
+var debug_tables = {
+  'i': debug_table_i,
+  'ii': debug_table_ii,
+  'iidiiii': debug_table_iidiiii,
+  'iii': debug_table_iii,
+  'iiii': debug_table_iiii,
+  'iiiii': debug_table_iiiii,
+  'iiiiid': debug_table_iiiiid,
+  'iiiiii': debug_table_iiiiii,
+  'iiiiiid': debug_table_iiiiiid,
+  'iiiiiii': debug_table_iiiiiii,
+  'iiiiiiii': debug_table_iiiiiiii,
+  'iiiiiiiii': debug_table_iiiiiiiii,
+  'iiiiiiiiiii': debug_table_iiiiiiiiiii,
+  'iiiiiiiiiiii': debug_table_iiiiiiiiiiii,
+  'iiiiij': debug_table_iiiiij,
+  'jiji': debug_table_jiji,
+  'v': debug_table_v,
+  'vi': debug_table_vi,
+  'vii': debug_table_vii,
+  'viii': debug_table_viii,
+  'viiii': debug_table_viiii,
+  'viiiii': debug_table_viiiii,
+  'viiiiii': debug_table_viiiiii,
+  'viiiiiiiiii': debug_table_viiiiiiiiii,
+  'viiiiiiiiiii': debug_table_viiiiiiiiiii,
+  'viijii': debug_table_viijii,
+};
+function nullFunc_i(x) { abortFnPtrError(x, 'i'); }
+function nullFunc_ii(x) { abortFnPtrError(x, 'ii'); }
+function nullFunc_iidiiii(x) { abortFnPtrError(x, 'iidiiii'); }
+function nullFunc_iii(x) { abortFnPtrError(x, 'iii'); }
+function nullFunc_iiii(x) { abortFnPtrError(x, 'iiii'); }
+function nullFunc_iiiii(x) { abortFnPtrError(x, 'iiiii'); }
+function nullFunc_iiiiid(x) { abortFnPtrError(x, 'iiiiid'); }
+function nullFunc_iiiiii(x) { abortFnPtrError(x, 'iiiiii'); }
+function nullFunc_iiiiiid(x) { abortFnPtrError(x, 'iiiiiid'); }
+function nullFunc_iiiiiii(x) { abortFnPtrError(x, 'iiiiiii'); }
+function nullFunc_iiiiiiii(x) { abortFnPtrError(x, 'iiiiiiii'); }
+function nullFunc_iiiiiiiii(x) { abortFnPtrError(x, 'iiiiiiiii'); }
+function nullFunc_iiiiiiiiiii(x) { abortFnPtrError(x, 'iiiiiiiiiii'); }
+function nullFunc_iiiiiiiiiiii(x) { abortFnPtrError(x, 'iiiiiiiiiiii'); }
+function nullFunc_iiiiij(x) { abortFnPtrError(x, 'iiiiij'); }
+function nullFunc_jiji(x) { abortFnPtrError(x, 'jiji'); }
+function nullFunc_v(x) { abortFnPtrError(x, 'v'); }
+function nullFunc_vi(x) { abortFnPtrError(x, 'vi'); }
+function nullFunc_vii(x) { abortFnPtrError(x, 'vii'); }
+function nullFunc_viii(x) { abortFnPtrError(x, 'viii'); }
+function nullFunc_viiii(x) { abortFnPtrError(x, 'viiii'); }
+function nullFunc_viiiii(x) { abortFnPtrError(x, 'viiiii'); }
+function nullFunc_viiiiii(x) { abortFnPtrError(x, 'viiiiii'); }
+function nullFunc_viiiiiiiiii(x) { abortFnPtrError(x, 'viiiiiiiiii'); }
+function nullFunc_viiiiiiiiiii(x) { abortFnPtrError(x, 'viiiiiiiiiii'); }
+function nullFunc_viijii(x) { abortFnPtrError(x, 'viijii'); }
 
 function invoke_viiii(index,a1,a2,a3,a4) {
   var sp = stackSave();
   try {
-    Module["dynCall_viiii"](index,a1,a2,a3,a4);
+    dynCall_viiii(index,a1,a2,a3,a4);
   } catch(e) {
     stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
+    if (e !== e+0 && e !== 'longjmp') throw e;
+    _setThrew(1, 0);
   }
 }
 
-function invoke_viiiii(index,a1,a2,a3,a4,a5) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viiiii"](index,a1,a2,a3,a4,a5);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
+var asmGlobalArg = {};
 
-function invoke_viiiiii(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viiiiii"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_viiiiiii(index,a1,a2,a3,a4,a5,a6,a7) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viiiiiii"](index,a1,a2,a3,a4,a5,a6,a7);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_viiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viiiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_viiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viiiiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_viiiiiiiiiiiiiii(index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viiiiiiiiiiiiiii"](index,a1,a2,a3,a4,a5,a6,a7,a8,a9,a10,a11,a12,a13,a14,a15);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-function invoke_viijii(index,a1,a2,a3,a4,a5,a6) {
-  var sp = stackSave();
-  try {
-    Module["dynCall_viijii"](index,a1,a2,a3,a4,a5,a6);
-  } catch(e) {
-    stackRestore(sp);
-    if (typeof e !== 'number' && e !== 'longjmp') throw e;
-    Module["setThrew"](1, 0);
-  }
-}
-
-Module.asmGlobalArg = {};
-
-Module.asmLibraryArg = { "abort": abort, "assert": assert, "enlargeMemory": enlargeMemory, "getTotalMemory": getTotalMemory, "abortOnCannotGrowMemory": abortOnCannotGrowMemory, "abortStackOverflow": abortStackOverflow, "nullFunc_diii": nullFunc_diii, "nullFunc_fiii": nullFunc_fiii, "nullFunc_i": nullFunc_i, "nullFunc_ii": nullFunc_ii, "nullFunc_iii": nullFunc_iii, "nullFunc_iiii": nullFunc_iiii, "nullFunc_iiiii": nullFunc_iiiii, "nullFunc_iiiiid": nullFunc_iiiiid, "nullFunc_iiiiii": nullFunc_iiiiii, "nullFunc_iiiiiid": nullFunc_iiiiiid, "nullFunc_iiiiiii": nullFunc_iiiiiii, "nullFunc_iiiiiiii": nullFunc_iiiiiiii, "nullFunc_iiiiiiiii": nullFunc_iiiiiiiii, "nullFunc_iiiiiiiiiii": nullFunc_iiiiiiiiiii, "nullFunc_iiiiiiiiiiii": nullFunc_iiiiiiiiiiii, "nullFunc_iiiiiiiiiiiii": nullFunc_iiiiiiiiiiiii, "nullFunc_iiiiij": nullFunc_iiiiij, "nullFunc_jiiii": nullFunc_jiiii, "nullFunc_v": nullFunc_v, "nullFunc_vi": nullFunc_vi, "nullFunc_vii": nullFunc_vii, "nullFunc_viii": nullFunc_viii, "nullFunc_viiii": nullFunc_viiii, "nullFunc_viiiii": nullFunc_viiiii, "nullFunc_viiiiii": nullFunc_viiiiii, "nullFunc_viiiiiii": nullFunc_viiiiiii, "nullFunc_viiiiiiiiii": nullFunc_viiiiiiiiii, "nullFunc_viiiiiiiiiii": nullFunc_viiiiiiiiiii, "nullFunc_viiiiiiiiiiiiiii": nullFunc_viiiiiiiiiiiiiii, "nullFunc_viijii": nullFunc_viijii, "invoke_diii": invoke_diii, "invoke_fiii": invoke_fiii, "invoke_i": invoke_i, "invoke_ii": invoke_ii, "invoke_iii": invoke_iii, "invoke_iiii": invoke_iiii, "invoke_iiiii": invoke_iiiii, "invoke_iiiiid": invoke_iiiiid, "invoke_iiiiii": invoke_iiiiii, "invoke_iiiiiid": invoke_iiiiiid, "invoke_iiiiiii": invoke_iiiiiii, "invoke_iiiiiiii": invoke_iiiiiiii, "invoke_iiiiiiiii": invoke_iiiiiiiii, "invoke_iiiiiiiiiii": invoke_iiiiiiiiiii, "invoke_iiiiiiiiiiii": invoke_iiiiiiiiiiii, "invoke_iiiiiiiiiiiii": invoke_iiiiiiiiiiiii, "invoke_iiiiij": invoke_iiiiij, "invoke_jiiii": invoke_jiiii, "invoke_v": invoke_v, "invoke_vi": invoke_vi, "invoke_vii": invoke_vii, "invoke_viii": invoke_viii, "invoke_viiii": invoke_viiii, "invoke_viiiii": invoke_viiiii, "invoke_viiiiii": invoke_viiiiii, "invoke_viiiiiii": invoke_viiiiiii, "invoke_viiiiiiiiii": invoke_viiiiiiiiii, "invoke_viiiiiiiiiii": invoke_viiiiiiiiiii, "invoke_viiiiiiiiiiiiiii": invoke_viiiiiiiiiiiiiii, "invoke_viijii": invoke_viijii, "ClassHandle": ClassHandle, "ClassHandle_clone": ClassHandle_clone, "ClassHandle_delete": ClassHandle_delete, "ClassHandle_deleteLater": ClassHandle_deleteLater, "ClassHandle_isAliasOf": ClassHandle_isAliasOf, "ClassHandle_isDeleted": ClassHandle_isDeleted, "RegisteredClass": RegisteredClass, "RegisteredPointer": RegisteredPointer, "RegisteredPointer_deleteObject": RegisteredPointer_deleteObject, "RegisteredPointer_destructor": RegisteredPointer_destructor, "RegisteredPointer_fromWireType": RegisteredPointer_fromWireType, "RegisteredPointer_getPointee": RegisteredPointer_getPointee, "___assert_fail": ___assert_fail, "___buildEnvironment": ___buildEnvironment, "___cxa_allocate_exception": ___cxa_allocate_exception, "___cxa_begin_catch": ___cxa_begin_catch, "___cxa_end_catch": ___cxa_end_catch, "___cxa_find_matching_catch": ___cxa_find_matching_catch, "___cxa_find_matching_catch_2": ___cxa_find_matching_catch_2, "___cxa_find_matching_catch_3": ___cxa_find_matching_catch_3, "___cxa_free_exception": ___cxa_free_exception, "___cxa_rethrow": ___cxa_rethrow, "___cxa_throw": ___cxa_throw, "___cxa_uncaught_exception": ___cxa_uncaught_exception, "___gxx_personality_v0": ___gxx_personality_v0, "___lock": ___lock, "___map_file": ___map_file, "___resumeException": ___resumeException, "___setErrNo": ___setErrNo, "___syscall140": ___syscall140, "___syscall145": ___syscall145, "___syscall146": ___syscall146, "___syscall221": ___syscall221, "___syscall3": ___syscall3, "___syscall41": ___syscall41, "___syscall5": ___syscall5, "___syscall54": ___syscall54, "___syscall6": ___syscall6, "___syscall91": ___syscall91, "___unlock": ___unlock, "__addDays": __addDays, "__arraySum": __arraySum, "__embind_finalize_value_object": __embind_finalize_value_object, "__embind_register_bool": __embind_register_bool, "__embind_register_class": __embind_register_class, "__embind_register_class_constructor": __embind_register_class_constructor, "__embind_register_class_function": __embind_register_class_function, "__embind_register_emval": __embind_register_emval, "__embind_register_float": __embind_register_float, "__embind_register_function": __embind_register_function, "__embind_register_integer": __embind_register_integer, "__embind_register_memory_view": __embind_register_memory_view, "__embind_register_std_string": __embind_register_std_string, "__embind_register_std_wstring": __embind_register_std_wstring, "__embind_register_value_object": __embind_register_value_object, "__embind_register_value_object_field": __embind_register_value_object_field, "__embind_register_void": __embind_register_void, "__emval_call": __emval_call, "__emval_decref": __emval_decref, "__emval_get_global": __emval_get_global, "__emval_incref": __emval_incref, "__emval_lookupTypes": __emval_lookupTypes, "__emval_register": __emval_register, "__emval_take_value": __emval_take_value, "__isLeapYear": __isLeapYear, "_abort": _abort, "_embind_repr": _embind_repr, "_emscripten_memcpy_big": _emscripten_memcpy_big, "_getenv": _getenv, "_gettimeofday": _gettimeofday, "_llvm_bswap_i64": _llvm_bswap_i64, "_llvm_ceil_f32": _llvm_ceil_f32, "_llvm_stackrestore": _llvm_stackrestore, "_llvm_stacksave": _llvm_stacksave, "_longjmp": _longjmp, "_pthread_cond_wait": _pthread_cond_wait, "_pthread_getspecific": _pthread_getspecific, "_pthread_key_create": _pthread_key_create, "_pthread_once": _pthread_once, "_pthread_rwlock_rdlock": _pthread_rwlock_rdlock, "_pthread_rwlock_unlock": _pthread_rwlock_unlock, "_pthread_rwlock_wrlock": _pthread_rwlock_wrlock, "_pthread_setspecific": _pthread_setspecific, "_strftime": _strftime, "_strftime_l": _strftime_l, "constNoSmartPtrRawPointerToWireType": constNoSmartPtrRawPointerToWireType, "count_emval_handles": count_emval_handles, "craftInvokerFunction": craftInvokerFunction, "createNamedFunction": createNamedFunction, "downcastPointer": downcastPointer, "embind__requireFunction": embind__requireFunction, "embind_init_charCodes": embind_init_charCodes, "emval_get_global": emval_get_global, "ensureOverloadTable": ensureOverloadTable, "exposePublicSymbol": exposePublicSymbol, "extendError": extendError, "floatReadValueFromPointer": floatReadValueFromPointer, "flushPendingDeletes": flushPendingDeletes, "genericPointerToWireType": genericPointerToWireType, "getBasestPointer": getBasestPointer, "getInheritedInstance": getInheritedInstance, "getInheritedInstanceCount": getInheritedInstanceCount, "getLiveInheritedInstances": getLiveInheritedInstances, "getShiftFromSize": getShiftFromSize, "getStringOrSymbol": getStringOrSymbol, "getTypeName": getTypeName, "get_first_emval": get_first_emval, "heap32VectorToArray": heap32VectorToArray, "init_ClassHandle": init_ClassHandle, "init_RegisteredPointer": init_RegisteredPointer, "init_embind": init_embind, "init_emval": init_emval, "integerReadValueFromPointer": integerReadValueFromPointer, "makeClassHandle": makeClassHandle, "makeLegalFunctionName": makeLegalFunctionName, "new_": new_, "nonConstNoSmartPtrRawPointerToWireType": nonConstNoSmartPtrRawPointerToWireType, "readLatin1String": readLatin1String, "registerType": registerType, "replacePublicSymbol": replacePublicSymbol, "requireHandle": requireHandle, "requireRegisteredType": requireRegisteredType, "runDestructor": runDestructor, "runDestructors": runDestructors, "setDelayFunction": setDelayFunction, "shallowCopyInternalPointer": shallowCopyInternalPointer, "simpleReadValueFromPointer": simpleReadValueFromPointer, "throwBindingError": throwBindingError, "throwInstanceAlreadyDeleted": throwInstanceAlreadyDeleted, "throwInternalError": throwInternalError, "throwUnboundTypeError": throwUnboundTypeError, "upcastPointer": upcastPointer, "whenDependentTypesAreResolved": whenDependentTypesAreResolved, "DYNAMICTOP_PTR": DYNAMICTOP_PTR, "tempDoublePtr": tempDoublePtr, "ABORT": ABORT, "STACKTOP": STACKTOP, "STACK_MAX": STACK_MAX };
+var asmLibraryArg = {
+  "abort": abort,
+  "setTempRet0": setTempRet0,
+  "getTempRet0": getTempRet0,
+  "abortStackOverflow": abortStackOverflow,
+  "nullFunc_i": nullFunc_i,
+  "nullFunc_ii": nullFunc_ii,
+  "nullFunc_iidiiii": nullFunc_iidiiii,
+  "nullFunc_iii": nullFunc_iii,
+  "nullFunc_iiii": nullFunc_iiii,
+  "nullFunc_iiiii": nullFunc_iiiii,
+  "nullFunc_iiiiid": nullFunc_iiiiid,
+  "nullFunc_iiiiii": nullFunc_iiiiii,
+  "nullFunc_iiiiiid": nullFunc_iiiiiid,
+  "nullFunc_iiiiiii": nullFunc_iiiiiii,
+  "nullFunc_iiiiiiii": nullFunc_iiiiiiii,
+  "nullFunc_iiiiiiiii": nullFunc_iiiiiiiii,
+  "nullFunc_iiiiiiiiiii": nullFunc_iiiiiiiiiii,
+  "nullFunc_iiiiiiiiiiii": nullFunc_iiiiiiiiiiii,
+  "nullFunc_iiiiij": nullFunc_iiiiij,
+  "nullFunc_jiji": nullFunc_jiji,
+  "nullFunc_v": nullFunc_v,
+  "nullFunc_vi": nullFunc_vi,
+  "nullFunc_vii": nullFunc_vii,
+  "nullFunc_viii": nullFunc_viii,
+  "nullFunc_viiii": nullFunc_viiii,
+  "nullFunc_viiiii": nullFunc_viiiii,
+  "nullFunc_viiiiii": nullFunc_viiiiii,
+  "nullFunc_viiiiiiiiii": nullFunc_viiiiiiiiii,
+  "nullFunc_viiiiiiiiiii": nullFunc_viiiiiiiiiii,
+  "nullFunc_viijii": nullFunc_viijii,
+  "invoke_viiii": invoke_viiii,
+  "ClassHandle": ClassHandle,
+  "ClassHandle_clone": ClassHandle_clone,
+  "ClassHandle_delete": ClassHandle_delete,
+  "ClassHandle_deleteLater": ClassHandle_deleteLater,
+  "ClassHandle_isAliasOf": ClassHandle_isAliasOf,
+  "ClassHandle_isDeleted": ClassHandle_isDeleted,
+  "RegisteredClass": RegisteredClass,
+  "RegisteredPointer": RegisteredPointer,
+  "RegisteredPointer_deleteObject": RegisteredPointer_deleteObject,
+  "RegisteredPointer_destructor": RegisteredPointer_destructor,
+  "RegisteredPointer_fromWireType": RegisteredPointer_fromWireType,
+  "RegisteredPointer_getPointee": RegisteredPointer_getPointee,
+  "___assert_fail": ___assert_fail,
+  "___buildEnvironment": ___buildEnvironment,
+  "___cxa_allocate_exception": ___cxa_allocate_exception,
+  "___cxa_begin_catch": ___cxa_begin_catch,
+  "___cxa_pure_virtual": ___cxa_pure_virtual,
+  "___cxa_throw": ___cxa_throw,
+  "___cxa_uncaught_exceptions": ___cxa_uncaught_exceptions,
+  "___exception_addRef": ___exception_addRef,
+  "___exception_deAdjust": ___exception_deAdjust,
+  "___gxx_personality_v0": ___gxx_personality_v0,
+  "___lock": ___lock,
+  "___map_file": ___map_file,
+  "___setErrNo": ___setErrNo,
+  "___syscall140": ___syscall140,
+  "___syscall145": ___syscall145,
+  "___syscall146": ___syscall146,
+  "___syscall221": ___syscall221,
+  "___syscall3": ___syscall3,
+  "___syscall41": ___syscall41,
+  "___syscall5": ___syscall5,
+  "___syscall54": ___syscall54,
+  "___syscall6": ___syscall6,
+  "___syscall91": ___syscall91,
+  "___unlock": ___unlock,
+  "__addDays": __addDays,
+  "__arraySum": __arraySum,
+  "__embind_finalize_value_object": __embind_finalize_value_object,
+  "__embind_register_bool": __embind_register_bool,
+  "__embind_register_class": __embind_register_class,
+  "__embind_register_class_constructor": __embind_register_class_constructor,
+  "__embind_register_class_function": __embind_register_class_function,
+  "__embind_register_emval": __embind_register_emval,
+  "__embind_register_float": __embind_register_float,
+  "__embind_register_function": __embind_register_function,
+  "__embind_register_integer": __embind_register_integer,
+  "__embind_register_memory_view": __embind_register_memory_view,
+  "__embind_register_std_string": __embind_register_std_string,
+  "__embind_register_std_wstring": __embind_register_std_wstring,
+  "__embind_register_value_object": __embind_register_value_object,
+  "__embind_register_value_object_field": __embind_register_value_object_field,
+  "__embind_register_void": __embind_register_void,
+  "__emscripten_syscall_munmap": __emscripten_syscall_munmap,
+  "__emval_call": __emval_call,
+  "__emval_decref": __emval_decref,
+  "__emval_get_global": __emval_get_global,
+  "__emval_incref": __emval_incref,
+  "__emval_lookupTypes": __emval_lookupTypes,
+  "__emval_register": __emval_register,
+  "__emval_take_value": __emval_take_value,
+  "__isLeapYear": __isLeapYear,
+  "_abort": _abort,
+  "_embind_repr": _embind_repr,
+  "_emscripten_get_heap_size": _emscripten_get_heap_size,
+  "_emscripten_memcpy_big": _emscripten_memcpy_big,
+  "_emscripten_resize_heap": _emscripten_resize_heap,
+  "_getenv": _getenv,
+  "_gettimeofday": _gettimeofday,
+  "_llvm_bswap_i64": _llvm_bswap_i64,
+  "_llvm_stackrestore": _llvm_stackrestore,
+  "_llvm_stacksave": _llvm_stacksave,
+  "_llvm_trap": _llvm_trap,
+  "_longjmp": _longjmp,
+  "_pthread_cond_wait": _pthread_cond_wait,
+  "_pthread_rwlock_rdlock": _pthread_rwlock_rdlock,
+  "_pthread_rwlock_unlock": _pthread_rwlock_unlock,
+  "_pthread_rwlock_wrlock": _pthread_rwlock_wrlock,
+  "_strftime": _strftime,
+  "_strftime_l": _strftime_l,
+  "abortOnCannotGrowMemory": abortOnCannotGrowMemory,
+  "attachFinalizer": attachFinalizer,
+  "constNoSmartPtrRawPointerToWireType": constNoSmartPtrRawPointerToWireType,
+  "count_emval_handles": count_emval_handles,
+  "craftInvokerFunction": craftInvokerFunction,
+  "createNamedFunction": createNamedFunction,
+  "demangle": demangle,
+  "demangleAll": demangleAll,
+  "detachFinalizer": detachFinalizer,
+  "downcastPointer": downcastPointer,
+  "embind__requireFunction": embind__requireFunction,
+  "embind_init_charCodes": embind_init_charCodes,
+  "emscripten_realloc_buffer": emscripten_realloc_buffer,
+  "emval_get_global": emval_get_global,
+  "ensureOverloadTable": ensureOverloadTable,
+  "exposePublicSymbol": exposePublicSymbol,
+  "extendError": extendError,
+  "floatReadValueFromPointer": floatReadValueFromPointer,
+  "flushPendingDeletes": flushPendingDeletes,
+  "genericPointerToWireType": genericPointerToWireType,
+  "getBasestPointer": getBasestPointer,
+  "getInheritedInstance": getInheritedInstance,
+  "getInheritedInstanceCount": getInheritedInstanceCount,
+  "getLiveInheritedInstances": getLiveInheritedInstances,
+  "getShiftFromSize": getShiftFromSize,
+  "getStringOrSymbol": getStringOrSymbol,
+  "getTypeName": getTypeName,
+  "get_first_emval": get_first_emval,
+  "heap32VectorToArray": heap32VectorToArray,
+  "init_ClassHandle": init_ClassHandle,
+  "init_RegisteredPointer": init_RegisteredPointer,
+  "init_embind": init_embind,
+  "init_emval": init_emval,
+  "integerReadValueFromPointer": integerReadValueFromPointer,
+  "jsStackTrace": jsStackTrace,
+  "makeClassHandle": makeClassHandle,
+  "makeLegalFunctionName": makeLegalFunctionName,
+  "new_": new_,
+  "nonConstNoSmartPtrRawPointerToWireType": nonConstNoSmartPtrRawPointerToWireType,
+  "readLatin1String": readLatin1String,
+  "registerType": registerType,
+  "releaseClassHandle": releaseClassHandle,
+  "replacePublicSymbol": replacePublicSymbol,
+  "requireHandle": requireHandle,
+  "requireRegisteredType": requireRegisteredType,
+  "runDestructor": runDestructor,
+  "runDestructors": runDestructors,
+  "setDelayFunction": setDelayFunction,
+  "shallowCopyInternalPointer": shallowCopyInternalPointer,
+  "simpleReadValueFromPointer": simpleReadValueFromPointer,
+  "stackTrace": stackTrace,
+  "throwBindingError": throwBindingError,
+  "throwInstanceAlreadyDeleted": throwInstanceAlreadyDeleted,
+  "throwInternalError": throwInternalError,
+  "throwUnboundTypeError": throwUnboundTypeError,
+  "upcastPointer": upcastPointer,
+  "whenDependentTypesAreResolved": whenDependentTypesAreResolved,
+  "tempDoublePtr": tempDoublePtr,
+  "DYNAMICTOP_PTR": DYNAMICTOP_PTR
+};
 // EMSCRIPTEN_START_ASM
 var asm =Module["asm"]// EMSCRIPTEN_END_ASM
-(Module.asmGlobalArg, Module.asmLibraryArg, buffer);
+(asmGlobalArg, asmLibraryArg, buffer);
 
-var real___GLOBAL__sub_I_bind_cpp = asm["__GLOBAL__sub_I_bind_cpp"]; asm["__GLOBAL__sub_I_bind_cpp"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real___GLOBAL__sub_I_bind_cpp.apply(null, arguments);
-};
-
-var real___GLOBAL__sub_I_bindings_cc = asm["__GLOBAL__sub_I_bindings_cc"]; asm["__GLOBAL__sub_I_bindings_cc"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real___GLOBAL__sub_I_bindings_cc.apply(null, arguments);
-};
-
-var real___ZSt18uncaught_exceptionv = asm["__ZSt18uncaught_exceptionv"]; asm["__ZSt18uncaught_exceptionv"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real___ZSt18uncaught_exceptionv.apply(null, arguments);
-};
-
-var real____cxa_can_catch = asm["___cxa_can_catch"]; asm["___cxa_can_catch"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real____cxa_can_catch.apply(null, arguments);
-};
-
-var real____cxa_demangle = asm["___cxa_demangle"]; asm["___cxa_demangle"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real____cxa_demangle.apply(null, arguments);
-};
-
-var real____cxa_is_pointer_type = asm["___cxa_is_pointer_type"]; asm["___cxa_is_pointer_type"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real____cxa_is_pointer_type.apply(null, arguments);
-};
-
-var real____emscripten_environ_constructor = asm["___emscripten_environ_constructor"]; asm["___emscripten_environ_constructor"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real____emscripten_environ_constructor.apply(null, arguments);
-};
-
-var real____errno_location = asm["___errno_location"]; asm["___errno_location"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real____errno_location.apply(null, arguments);
-};
-
-var real____getTypeName = asm["___getTypeName"]; asm["___getTypeName"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real____getTypeName.apply(null, arguments);
-};
-
-var real___get_environ = asm["__get_environ"]; asm["__get_environ"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real___get_environ.apply(null, arguments);
-};
-
-var real__fflush = asm["_fflush"]; asm["_fflush"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__fflush.apply(null, arguments);
-};
-
-var real__free = asm["_free"]; asm["_free"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__free.apply(null, arguments);
-};
-
-var real__htonl = asm["_htonl"]; asm["_htonl"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__htonl.apply(null, arguments);
-};
-
-var real__htons = asm["_htons"]; asm["_htons"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__htons.apply(null, arguments);
-};
-
-var real__llvm_bswap_i16 = asm["_llvm_bswap_i16"]; asm["_llvm_bswap_i16"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__llvm_bswap_i16.apply(null, arguments);
-};
-
-var real__llvm_bswap_i32 = asm["_llvm_bswap_i32"]; asm["_llvm_bswap_i32"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__llvm_bswap_i32.apply(null, arguments);
-};
-
-var real__malloc = asm["_malloc"]; asm["_malloc"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__malloc.apply(null, arguments);
-};
-
-var real__memmove = asm["_memmove"]; asm["_memmove"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__memmove.apply(null, arguments);
-};
-
-var real__ntohs = asm["_ntohs"]; asm["_ntohs"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__ntohs.apply(null, arguments);
-};
-
-var real__pthread_cond_broadcast = asm["_pthread_cond_broadcast"]; asm["_pthread_cond_broadcast"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__pthread_cond_broadcast.apply(null, arguments);
-};
-
-var real__pthread_mutex_lock = asm["_pthread_mutex_lock"]; asm["_pthread_mutex_lock"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__pthread_mutex_lock.apply(null, arguments);
-};
-
-var real__pthread_mutex_unlock = asm["_pthread_mutex_unlock"]; asm["_pthread_mutex_unlock"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__pthread_mutex_unlock.apply(null, arguments);
-};
-
-var real__realloc = asm["_realloc"]; asm["_realloc"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__realloc.apply(null, arguments);
-};
-
-var real__saveSetjmp = asm["_saveSetjmp"]; asm["_saveSetjmp"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__saveSetjmp.apply(null, arguments);
-};
-
-var real__sbrk = asm["_sbrk"]; asm["_sbrk"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__sbrk.apply(null, arguments);
-};
-
-var real__testSetjmp = asm["_testSetjmp"]; asm["_testSetjmp"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real__testSetjmp.apply(null, arguments);
-};
-
-var real_establishStackSpace = asm["establishStackSpace"]; asm["establishStackSpace"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_establishStackSpace.apply(null, arguments);
-};
-
-var real_getTempRet0 = asm["getTempRet0"]; asm["getTempRet0"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_getTempRet0.apply(null, arguments);
-};
-
-var real_setTempRet0 = asm["setTempRet0"]; asm["setTempRet0"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_setTempRet0.apply(null, arguments);
-};
-
-var real_setThrew = asm["setThrew"]; asm["setThrew"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_setThrew.apply(null, arguments);
-};
-
-var real_stackAlloc = asm["stackAlloc"]; asm["stackAlloc"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_stackAlloc.apply(null, arguments);
-};
-
-var real_stackRestore = asm["stackRestore"]; asm["stackRestore"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_stackRestore.apply(null, arguments);
-};
-
-var real_stackSave = asm["stackSave"]; asm["stackSave"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return real_stackSave.apply(null, arguments);
-};
 Module["asm"] = asm;
-var __GLOBAL__sub_I_bind_cpp = Module["__GLOBAL__sub_I_bind_cpp"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["__GLOBAL__sub_I_bind_cpp"].apply(null, arguments) };
-var __GLOBAL__sub_I_bindings_cc = Module["__GLOBAL__sub_I_bindings_cc"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["__GLOBAL__sub_I_bindings_cc"].apply(null, arguments) };
 var __ZSt18uncaught_exceptionv = Module["__ZSt18uncaught_exceptionv"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["__ZSt18uncaught_exceptionv"].apply(null, arguments) };
+  return Module["asm"]["__ZSt18uncaught_exceptionv"].apply(null, arguments)
+};
+
 var ___cxa_can_catch = Module["___cxa_can_catch"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["___cxa_can_catch"].apply(null, arguments) };
+  return Module["asm"]["___cxa_can_catch"].apply(null, arguments)
+};
+
 var ___cxa_demangle = Module["___cxa_demangle"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["___cxa_demangle"].apply(null, arguments) };
+  return Module["asm"]["___cxa_demangle"].apply(null, arguments)
+};
+
 var ___cxa_is_pointer_type = Module["___cxa_is_pointer_type"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["___cxa_is_pointer_type"].apply(null, arguments) };
-var ___emscripten_environ_constructor = Module["___emscripten_environ_constructor"] = function() {
+  return Module["asm"]["___cxa_is_pointer_type"].apply(null, arguments)
+};
+
+var ___embind_register_native_and_builtin_types = Module["___embind_register_native_and_builtin_types"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["___emscripten_environ_constructor"].apply(null, arguments) };
+  return Module["asm"]["___embind_register_native_and_builtin_types"].apply(null, arguments)
+};
+
 var ___errno_location = Module["___errno_location"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["___errno_location"].apply(null, arguments) };
+  return Module["asm"]["___errno_location"].apply(null, arguments)
+};
+
 var ___getTypeName = Module["___getTypeName"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["___getTypeName"].apply(null, arguments) };
+  return Module["asm"]["___getTypeName"].apply(null, arguments)
+};
+
 var __get_environ = Module["__get_environ"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["__get_environ"].apply(null, arguments) };
+  return Module["asm"]["__get_environ"].apply(null, arguments)
+};
+
 var _emscripten_replace_memory = Module["_emscripten_replace_memory"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_emscripten_replace_memory"].apply(null, arguments) };
+  return Module["asm"]["_emscripten_replace_memory"].apply(null, arguments)
+};
+
 var _fflush = Module["_fflush"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_fflush"].apply(null, arguments) };
+  return Module["asm"]["_fflush"].apply(null, arguments)
+};
+
 var _free = Module["_free"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_free"].apply(null, arguments) };
+  return Module["asm"]["_free"].apply(null, arguments)
+};
+
 var _htonl = Module["_htonl"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_htonl"].apply(null, arguments) };
+  return Module["asm"]["_htonl"].apply(null, arguments)
+};
+
 var _htons = Module["_htons"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_htons"].apply(null, arguments) };
+  return Module["asm"]["_htons"].apply(null, arguments)
+};
+
 var _llvm_bswap_i16 = Module["_llvm_bswap_i16"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_llvm_bswap_i16"].apply(null, arguments) };
+  return Module["asm"]["_llvm_bswap_i16"].apply(null, arguments)
+};
+
 var _llvm_bswap_i32 = Module["_llvm_bswap_i32"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_llvm_bswap_i32"].apply(null, arguments) };
+  return Module["asm"]["_llvm_bswap_i32"].apply(null, arguments)
+};
+
 var _malloc = Module["_malloc"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_malloc"].apply(null, arguments) };
+  return Module["asm"]["_malloc"].apply(null, arguments)
+};
+
 var _memcpy = Module["_memcpy"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_memcpy"].apply(null, arguments) };
+  return Module["asm"]["_memcpy"].apply(null, arguments)
+};
+
 var _memmove = Module["_memmove"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_memmove"].apply(null, arguments) };
+  return Module["asm"]["_memmove"].apply(null, arguments)
+};
+
 var _memset = Module["_memset"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_memset"].apply(null, arguments) };
+  return Module["asm"]["_memset"].apply(null, arguments)
+};
+
 var _ntohs = Module["_ntohs"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_ntohs"].apply(null, arguments) };
+  return Module["asm"]["_ntohs"].apply(null, arguments)
+};
+
 var _pthread_cond_broadcast = Module["_pthread_cond_broadcast"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_pthread_cond_broadcast"].apply(null, arguments) };
-var _pthread_mutex_lock = Module["_pthread_mutex_lock"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_pthread_mutex_lock"].apply(null, arguments) };
-var _pthread_mutex_unlock = Module["_pthread_mutex_unlock"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_pthread_mutex_unlock"].apply(null, arguments) };
+  return Module["asm"]["_pthread_cond_broadcast"].apply(null, arguments)
+};
+
 var _realloc = Module["_realloc"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_realloc"].apply(null, arguments) };
+  return Module["asm"]["_realloc"].apply(null, arguments)
+};
+
 var _saveSetjmp = Module["_saveSetjmp"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_saveSetjmp"].apply(null, arguments) };
+  return Module["asm"]["_saveSetjmp"].apply(null, arguments)
+};
+
 var _sbrk = Module["_sbrk"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_sbrk"].apply(null, arguments) };
+  return Module["asm"]["_sbrk"].apply(null, arguments)
+};
+
+var _setThrew = Module["_setThrew"] = function() {
+  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
+  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
+  return Module["asm"]["_setThrew"].apply(null, arguments)
+};
+
 var _testSetjmp = Module["_testSetjmp"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["_testSetjmp"].apply(null, arguments) };
+  return Module["asm"]["_testSetjmp"].apply(null, arguments)
+};
+
 var establishStackSpace = Module["establishStackSpace"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["establishStackSpace"].apply(null, arguments) };
-var getTempRet0 = Module["getTempRet0"] = function() {
+  return Module["asm"]["establishStackSpace"].apply(null, arguments)
+};
+
+var globalCtors = Module["globalCtors"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["getTempRet0"].apply(null, arguments) };
-var runPostSets = Module["runPostSets"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["runPostSets"].apply(null, arguments) };
-var setTempRet0 = Module["setTempRet0"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["setTempRet0"].apply(null, arguments) };
-var setThrew = Module["setThrew"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["setThrew"].apply(null, arguments) };
+  return Module["asm"]["globalCtors"].apply(null, arguments)
+};
+
 var stackAlloc = Module["stackAlloc"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["stackAlloc"].apply(null, arguments) };
+  return Module["asm"]["stackAlloc"].apply(null, arguments)
+};
+
 var stackRestore = Module["stackRestore"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["stackRestore"].apply(null, arguments) };
+  return Module["asm"]["stackRestore"].apply(null, arguments)
+};
+
 var stackSave = Module["stackSave"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["stackSave"].apply(null, arguments) };
-var dynCall_diii = Module["dynCall_diii"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_diii"].apply(null, arguments) };
-var dynCall_fiii = Module["dynCall_fiii"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_fiii"].apply(null, arguments) };
+  return Module["asm"]["stackSave"].apply(null, arguments)
+};
+
 var dynCall_i = Module["dynCall_i"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_i"].apply(null, arguments) };
+  return Module["asm"]["dynCall_i"].apply(null, arguments)
+};
+
 var dynCall_ii = Module["dynCall_ii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_ii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_ii"].apply(null, arguments)
+};
+
+var dynCall_iidiiii = Module["dynCall_iidiiii"] = function() {
+  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
+  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
+  return Module["asm"]["dynCall_iidiiii"].apply(null, arguments)
+};
+
 var dynCall_iii = Module["dynCall_iii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iii"].apply(null, arguments)
+};
+
 var dynCall_iiii = Module["dynCall_iiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiii"].apply(null, arguments)
+};
+
 var dynCall_iiiii = Module["dynCall_iiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiid = Module["dynCall_iiiiid"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiid"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiid"].apply(null, arguments)
+};
+
 var dynCall_iiiiii = Module["dynCall_iiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiiid = Module["dynCall_iiiiiid"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiid"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiiid"].apply(null, arguments)
+};
+
 var dynCall_iiiiiii = Module["dynCall_iiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiiiii = Module["dynCall_iiiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiiiiii = Module["dynCall_iiiiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiiiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiiiiiiii = Module["dynCall_iiiiiiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiiiiiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiiiiiiiii = Module["dynCall_iiiiiiiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiiiiiiii"].apply(null, arguments) };
-var dynCall_iiiiiiiiiiiii = Module["dynCall_iiiiiiiiiiiii"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiiiiiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_iiiiiiiiiiii"].apply(null, arguments)
+};
+
 var dynCall_iiiiij = Module["dynCall_iiiiij"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_iiiiij"].apply(null, arguments) };
-var dynCall_jiiii = Module["dynCall_jiiii"] = function() {
+  return Module["asm"]["dynCall_iiiiij"].apply(null, arguments)
+};
+
+var dynCall_jiji = Module["dynCall_jiji"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_jiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_jiji"].apply(null, arguments)
+};
+
 var dynCall_v = Module["dynCall_v"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_v"].apply(null, arguments) };
+  return Module["asm"]["dynCall_v"].apply(null, arguments)
+};
+
 var dynCall_vi = Module["dynCall_vi"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_vi"].apply(null, arguments) };
+  return Module["asm"]["dynCall_vi"].apply(null, arguments)
+};
+
 var dynCall_vii = Module["dynCall_vii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_vii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_vii"].apply(null, arguments)
+};
+
 var dynCall_viii = Module["dynCall_viii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viii"].apply(null, arguments)
+};
+
 var dynCall_viiii = Module["dynCall_viiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viiii"].apply(null, arguments)
+};
+
 var dynCall_viiiii = Module["dynCall_viiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viiiii"].apply(null, arguments)
+};
+
 var dynCall_viiiiii = Module["dynCall_viiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiiiii"].apply(null, arguments) };
-var dynCall_viiiiiii = Module["dynCall_viiiiiii"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viiiiii"].apply(null, arguments)
+};
+
 var dynCall_viiiiiiiiii = Module["dynCall_viiiiiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiiiiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viiiiiiiiii"].apply(null, arguments)
+};
+
 var dynCall_viiiiiiiiiii = Module["dynCall_viiiiiiiiiii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiiiiiiiiii"].apply(null, arguments) };
-var dynCall_viiiiiiiiiiiiiii = Module["dynCall_viiiiiiiiiiiiiii"] = function() {
-  assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
-  assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viiiiiiiiiiiiiii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viiiiiiiiiii"].apply(null, arguments)
+};
+
 var dynCall_viijii = Module["dynCall_viijii"] = function() {
   assert(runtimeInitialized, 'you need to wait for the runtime to be ready (e.g. wait for main() to be called)');
   assert(!runtimeExited, 'the runtime was exited (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
-  return Module["asm"]["dynCall_viijii"].apply(null, arguments) };
+  return Module["asm"]["dynCall_viijii"].apply(null, arguments)
+};
 ;
 
 
@@ -8523,101 +8314,102 @@ var dynCall_viijii = Module["dynCall_viijii"] = function() {
 
 Module['asm'] = asm;
 
-if (!Module["intArrayFromString"]) Module["intArrayFromString"] = function() { abort("'intArrayFromString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["intArrayToString"]) Module["intArrayToString"] = function() { abort("'intArrayToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["ccall"]) Module["ccall"] = function() { abort("'ccall' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["cwrap"]) Module["cwrap"] = function() { abort("'cwrap' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["setValue"]) Module["setValue"] = function() { abort("'setValue' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["getValue"]) Module["getValue"] = function() { abort("'getValue' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["allocate"]) Module["allocate"] = function() { abort("'allocate' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["getMemory"]) Module["getMemory"] = function() { abort("'getMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["Pointer_stringify"]) Module["Pointer_stringify"] = function() { abort("'Pointer_stringify' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["AsciiToString"]) Module["AsciiToString"] = function() { abort("'AsciiToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stringToAscii"]) Module["stringToAscii"] = function() { abort("'stringToAscii' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["UTF8ArrayToString"]) Module["UTF8ArrayToString"] = function() { abort("'UTF8ArrayToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["UTF8ToString"]) Module["UTF8ToString"] = function() { abort("'UTF8ToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stringToUTF8Array"]) Module["stringToUTF8Array"] = function() { abort("'stringToUTF8Array' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stringToUTF8"]) Module["stringToUTF8"] = function() { abort("'stringToUTF8' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["lengthBytesUTF8"]) Module["lengthBytesUTF8"] = function() { abort("'lengthBytesUTF8' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["UTF16ToString"]) Module["UTF16ToString"] = function() { abort("'UTF16ToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stringToUTF16"]) Module["stringToUTF16"] = function() { abort("'stringToUTF16' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["lengthBytesUTF16"]) Module["lengthBytesUTF16"] = function() { abort("'lengthBytesUTF16' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["UTF32ToString"]) Module["UTF32ToString"] = function() { abort("'UTF32ToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stringToUTF32"]) Module["stringToUTF32"] = function() { abort("'stringToUTF32' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["lengthBytesUTF32"]) Module["lengthBytesUTF32"] = function() { abort("'lengthBytesUTF32' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["allocateUTF8"]) Module["allocateUTF8"] = function() { abort("'allocateUTF8' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stackTrace"]) Module["stackTrace"] = function() { abort("'stackTrace' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addOnPreRun"]) Module["addOnPreRun"] = function() { abort("'addOnPreRun' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addOnInit"]) Module["addOnInit"] = function() { abort("'addOnInit' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addOnPreMain"]) Module["addOnPreMain"] = function() { abort("'addOnPreMain' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addOnExit"]) Module["addOnExit"] = function() { abort("'addOnExit' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addOnPostRun"]) Module["addOnPostRun"] = function() { abort("'addOnPostRun' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["writeStringToMemory"]) Module["writeStringToMemory"] = function() { abort("'writeStringToMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["writeArrayToMemory"]) Module["writeArrayToMemory"] = function() { abort("'writeArrayToMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["writeAsciiToMemory"]) Module["writeAsciiToMemory"] = function() { abort("'writeAsciiToMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addRunDependency"]) Module["addRunDependency"] = function() { abort("'addRunDependency' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["removeRunDependency"]) Module["removeRunDependency"] = function() { abort("'removeRunDependency' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS"]) Module["FS"] = function() { abort("'FS' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["FS_createFolder"]) Module["FS_createFolder"] = function() { abort("'FS_createFolder' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_createPath"]) Module["FS_createPath"] = function() { abort("'FS_createPath' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_createDataFile"]) Module["FS_createDataFile"] = function() { abort("'FS_createDataFile' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_createPreloadedFile"]) Module["FS_createPreloadedFile"] = function() { abort("'FS_createPreloadedFile' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_createLazyFile"]) Module["FS_createLazyFile"] = function() { abort("'FS_createLazyFile' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_createLink"]) Module["FS_createLink"] = function() { abort("'FS_createLink' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_createDevice"]) Module["FS_createDevice"] = function() { abort("'FS_createDevice' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["FS_unlink"]) Module["FS_unlink"] = function() { abort("'FS_unlink' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
-if (!Module["GL"]) Module["GL"] = function() { abort("'GL' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["staticAlloc"]) Module["staticAlloc"] = function() { abort("'staticAlloc' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["dynamicAlloc"]) Module["dynamicAlloc"] = function() { abort("'dynamicAlloc' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["warnOnce"]) Module["warnOnce"] = function() { abort("'warnOnce' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["loadDynamicLibrary"]) Module["loadDynamicLibrary"] = function() { abort("'loadDynamicLibrary' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["loadWebAssemblyModule"]) Module["loadWebAssemblyModule"] = function() { abort("'loadWebAssemblyModule' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["getLEB"]) Module["getLEB"] = function() { abort("'getLEB' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["getFunctionTables"]) Module["getFunctionTables"] = function() { abort("'getFunctionTables' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["alignFunctionTables"]) Module["alignFunctionTables"] = function() { abort("'alignFunctionTables' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["registerFunctions"]) Module["registerFunctions"] = function() { abort("'registerFunctions' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["addFunction"]) Module["addFunction"] = function() { abort("'addFunction' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["removeFunction"]) Module["removeFunction"] = function() { abort("'removeFunction' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["getFuncWrapper"]) Module["getFuncWrapper"] = function() { abort("'getFuncWrapper' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["prettyPrint"]) Module["prettyPrint"] = function() { abort("'prettyPrint' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["makeBigInt"]) Module["makeBigInt"] = function() { abort("'makeBigInt' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["dynCall"]) Module["dynCall"] = function() { abort("'dynCall' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["getCompilerSetting"]) Module["getCompilerSetting"] = function() { abort("'getCompilerSetting' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stackSave"]) Module["stackSave"] = function() { abort("'stackSave' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stackRestore"]) Module["stackRestore"] = function() { abort("'stackRestore' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["stackAlloc"]) Module["stackAlloc"] = function() { abort("'stackAlloc' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["establishStackSpace"]) Module["establishStackSpace"] = function() { abort("'establishStackSpace' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["print"]) Module["print"] = function() { abort("'print' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
-if (!Module["printErr"]) Module["printErr"] = function() { abort("'printErr' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };if (!Module["ALLOC_NORMAL"]) Object.defineProperty(Module, "ALLOC_NORMAL", { get: function() { abort("'ALLOC_NORMAL' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
-if (!Module["ALLOC_STACK"]) Object.defineProperty(Module, "ALLOC_STACK", { get: function() { abort("'ALLOC_STACK' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
-if (!Module["ALLOC_STATIC"]) Object.defineProperty(Module, "ALLOC_STATIC", { get: function() { abort("'ALLOC_STATIC' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
-if (!Module["ALLOC_DYNAMIC"]) Object.defineProperty(Module, "ALLOC_DYNAMIC", { get: function() { abort("'ALLOC_DYNAMIC' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
-if (!Module["ALLOC_NONE"]) Object.defineProperty(Module, "ALLOC_NONE", { get: function() { abort("'ALLOC_NONE' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
+if (!Object.getOwnPropertyDescriptor(Module, "intArrayFromString")) Module["intArrayFromString"] = function() { abort("'intArrayFromString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "intArrayToString")) Module["intArrayToString"] = function() { abort("'intArrayToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "ccall")) Module["ccall"] = function() { abort("'ccall' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "cwrap")) Module["cwrap"] = function() { abort("'cwrap' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "setValue")) Module["setValue"] = function() { abort("'setValue' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getValue")) Module["getValue"] = function() { abort("'getValue' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "allocate")) Module["allocate"] = function() { abort("'allocate' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getMemory")) Module["getMemory"] = function() { abort("'getMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "AsciiToString")) Module["AsciiToString"] = function() { abort("'AsciiToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stringToAscii")) Module["stringToAscii"] = function() { abort("'stringToAscii' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "UTF8ArrayToString")) Module["UTF8ArrayToString"] = function() { abort("'UTF8ArrayToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "UTF8ToString")) Module["UTF8ToString"] = function() { abort("'UTF8ToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stringToUTF8Array")) Module["stringToUTF8Array"] = function() { abort("'stringToUTF8Array' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stringToUTF8")) Module["stringToUTF8"] = function() { abort("'stringToUTF8' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "lengthBytesUTF8")) Module["lengthBytesUTF8"] = function() { abort("'lengthBytesUTF8' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "UTF16ToString")) Module["UTF16ToString"] = function() { abort("'UTF16ToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stringToUTF16")) Module["stringToUTF16"] = function() { abort("'stringToUTF16' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "lengthBytesUTF16")) Module["lengthBytesUTF16"] = function() { abort("'lengthBytesUTF16' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "UTF32ToString")) Module["UTF32ToString"] = function() { abort("'UTF32ToString' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stringToUTF32")) Module["stringToUTF32"] = function() { abort("'stringToUTF32' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "lengthBytesUTF32")) Module["lengthBytesUTF32"] = function() { abort("'lengthBytesUTF32' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "allocateUTF8")) Module["allocateUTF8"] = function() { abort("'allocateUTF8' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stackTrace")) Module["stackTrace"] = function() { abort("'stackTrace' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addOnPreRun")) Module["addOnPreRun"] = function() { abort("'addOnPreRun' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addOnInit")) Module["addOnInit"] = function() { abort("'addOnInit' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addOnPreMain")) Module["addOnPreMain"] = function() { abort("'addOnPreMain' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addOnExit")) Module["addOnExit"] = function() { abort("'addOnExit' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addOnPostRun")) Module["addOnPostRun"] = function() { abort("'addOnPostRun' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "writeStringToMemory")) Module["writeStringToMemory"] = function() { abort("'writeStringToMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "writeArrayToMemory")) Module["writeArrayToMemory"] = function() { abort("'writeArrayToMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "writeAsciiToMemory")) Module["writeAsciiToMemory"] = function() { abort("'writeAsciiToMemory' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addRunDependency")) Module["addRunDependency"] = function() { abort("'addRunDependency' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "removeRunDependency")) Module["removeRunDependency"] = function() { abort("'removeRunDependency' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "ENV")) Module["ENV"] = function() { abort("'ENV' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS")) Module["FS"] = function() { abort("'FS' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createFolder")) Module["FS_createFolder"] = function() { abort("'FS_createFolder' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createPath")) Module["FS_createPath"] = function() { abort("'FS_createPath' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createDataFile")) Module["FS_createDataFile"] = function() { abort("'FS_createDataFile' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createPreloadedFile")) Module["FS_createPreloadedFile"] = function() { abort("'FS_createPreloadedFile' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createLazyFile")) Module["FS_createLazyFile"] = function() { abort("'FS_createLazyFile' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createLink")) Module["FS_createLink"] = function() { abort("'FS_createLink' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_createDevice")) Module["FS_createDevice"] = function() { abort("'FS_createDevice' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "FS_unlink")) Module["FS_unlink"] = function() { abort("'FS_unlink' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") };
+if (!Object.getOwnPropertyDescriptor(Module, "GL")) Module["GL"] = function() { abort("'GL' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "dynamicAlloc")) Module["dynamicAlloc"] = function() { abort("'dynamicAlloc' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "loadDynamicLibrary")) Module["loadDynamicLibrary"] = function() { abort("'loadDynamicLibrary' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "loadWebAssemblyModule")) Module["loadWebAssemblyModule"] = function() { abort("'loadWebAssemblyModule' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getLEB")) Module["getLEB"] = function() { abort("'getLEB' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getFunctionTables")) Module["getFunctionTables"] = function() { abort("'getFunctionTables' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "alignFunctionTables")) Module["alignFunctionTables"] = function() { abort("'alignFunctionTables' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "registerFunctions")) Module["registerFunctions"] = function() { abort("'registerFunctions' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "addFunction")) Module["addFunction"] = function() { abort("'addFunction' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "removeFunction")) Module["removeFunction"] = function() { abort("'removeFunction' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getFuncWrapper")) Module["getFuncWrapper"] = function() { abort("'getFuncWrapper' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "prettyPrint")) Module["prettyPrint"] = function() { abort("'prettyPrint' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "makeBigInt")) Module["makeBigInt"] = function() { abort("'makeBigInt' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "dynCall")) Module["dynCall"] = function() { abort("'dynCall' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getCompilerSetting")) Module["getCompilerSetting"] = function() { abort("'getCompilerSetting' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stackSave")) Module["stackSave"] = function() { abort("'stackSave' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stackRestore")) Module["stackRestore"] = function() { abort("'stackRestore' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "stackAlloc")) Module["stackAlloc"] = function() { abort("'stackAlloc' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "establishStackSpace")) Module["establishStackSpace"] = function() { abort("'establishStackSpace' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "print")) Module["print"] = function() { abort("'print' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "printErr")) Module["printErr"] = function() { abort("'printErr' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "getTempRet0")) Module["getTempRet0"] = function() { abort("'getTempRet0' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "setTempRet0")) Module["setTempRet0"] = function() { abort("'setTempRet0' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "callMain")) Module["callMain"] = function() { abort("'callMain' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "Pointer_stringify")) Module["Pointer_stringify"] = function() { abort("'Pointer_stringify' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };
+if (!Object.getOwnPropertyDescriptor(Module, "warnOnce")) Module["warnOnce"] = function() { abort("'warnOnce' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") };if (!Object.getOwnPropertyDescriptor(Module, "ALLOC_NORMAL")) Object.defineProperty(Module, "ALLOC_NORMAL", { get: function() { abort("'ALLOC_NORMAL' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
+if (!Object.getOwnPropertyDescriptor(Module, "ALLOC_STACK")) Object.defineProperty(Module, "ALLOC_STACK", { get: function() { abort("'ALLOC_STACK' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
+if (!Object.getOwnPropertyDescriptor(Module, "ALLOC_DYNAMIC")) Object.defineProperty(Module, "ALLOC_DYNAMIC", { get: function() { abort("'ALLOC_DYNAMIC' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
+if (!Object.getOwnPropertyDescriptor(Module, "ALLOC_NONE")) Object.defineProperty(Module, "ALLOC_NONE", { get: function() { abort("'ALLOC_NONE' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ)") } });
+if (!Object.getOwnPropertyDescriptor(Module, "calledRun")) Object.defineProperty(Module, "calledRun", { get: function() { abort("'calledRun' was not exported. add it to EXTRA_EXPORTED_RUNTIME_METHODS (see the FAQ). Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you") } });
 
 
+
+var calledRun;
 
 
 /**
  * @constructor
- * @extends {Error}
  * @this {ExitStatus}
  */
 function ExitStatus(status) {
   this.name = "ExitStatus";
   this.message = "Program terminated with exit(" + status + ")";
   this.status = status;
-};
-ExitStatus.prototype = new Error();
-ExitStatus.prototype.constructor = ExitStatus;
+}
 
-var initialStackTop;
 var calledMain = false;
 
 dependenciesFulfilled = function runCaller() {
   // If run has never been called, and we should call run (INVOKE_RUN is true, and Module.noInitialRun is not false)
-  if (!Module['calledRun']) run();
-  if (!Module['calledRun']) dependenciesFulfilled = runCaller; // try this again later, after new deps are fulfilled
-}
+  if (!calledRun) run();
+  if (!calledRun) dependenciesFulfilled = runCaller; // try this again later, after new deps are fulfilled
+};
 
 
 
@@ -8625,7 +8417,7 @@ dependenciesFulfilled = function runCaller() {
 
 /** @type {function(Array=)} */
 function run(args) {
-  args = args || Module['arguments'];
+  args = args || arguments_;
 
   if (runDependencies > 0) {
     return;
@@ -8636,15 +8428,16 @@ function run(args) {
   preRun();
 
   if (runDependencies > 0) return; // a preRun added a dependency, run will be called later
-  if (Module['calledRun']) return; // run may have just been called through dependencies being fulfilled just in this very frame
 
   function doRun() {
-    if (Module['calledRun']) return; // run may have just been called while the async setStatus time below was happening
-    Module['calledRun'] = true;
+    // run may have just been called through dependencies being fulfilled just in this very frame,
+    // or while the async setStatus time below was happening
+    if (calledRun) return;
+    calledRun = true;
 
     if (ABORT) return;
 
-    ensureInitRuntime();
+    initRuntime();
 
     preMain();
 
@@ -8663,7 +8456,8 @@ function run(args) {
       }, 1);
       doRun();
     }, 1);
-  } else {
+  } else
+  {
     doRun();
   }
   checkStackCookie();
@@ -8679,7 +8473,7 @@ function checkUnflushedContent() {
   // builds we do so just for this check, and here we see if there is any
   // content to flush, that is, we check if there would have been
   // something a non-ASSERTIONS build would have not seen.
-  // How we flush the streams depends on whether we are in NO_FILESYSTEM
+  // How we flush the streams depends on whether we are in SYSCALLS_REQUIRE_FILESYSTEM=0
   // mode (which has its own special function for this; otherwise, all
   // the code is inside libc)
   var print = out;
@@ -8692,24 +8486,21 @@ function checkUnflushedContent() {
     var flush = Module['_fflush'];
     if (flush) flush(0);
     // also flush in the JS FS layer
-    var hasFS = true;
-    if (hasFS) {
-      ['stdout', 'stderr'].forEach(function(name) {
-        var info = FS.analyzePath('/dev/' + name);
-        if (!info) return;
-        var stream = info.object;
-        var rdev = stream.rdev;
-        var tty = TTY.ttys[rdev];
-        if (tty && tty.output && tty.output.length) {
-          has = true;
-        }
-      });
-    }
+    ['stdout', 'stderr'].forEach(function(name) {
+      var info = FS.analyzePath('/dev/' + name);
+      if (!info) return;
+      var stream = info.object;
+      var rdev = stream.rdev;
+      var tty = TTY.ttys[rdev];
+      if (tty && tty.output && tty.output.length) {
+        has = true;
+      }
+    });
   } catch(e) {}
   out = print;
   err = printErr;
   if (has) {
-    warnOnce('stdio streams had content in them that was not flushed. you should set NO_EXIT_RUNTIME to 0 (see the FAQ), or make sure to emit a newline when you printf etc.');
+    warnOnce('stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the FAQ), or make sure to emit a newline when you printf etc.');
   }
 }
 
@@ -8727,20 +8518,19 @@ function exit(status, implicit) {
   if (Module['noExitRuntime']) {
     // if exit() was called, we may warn the user if the runtime isn't actually being shut down
     if (!implicit) {
-      err('exit(' + status + ') called, but NO_EXIT_RUNTIME is set, so halting execution but not exiting the runtime or preventing further async execution (build with NO_EXIT_RUNTIME=0, if you want a true shutdown)');
+      err('exit(' + status + ') called, but EXIT_RUNTIME is not set, so halting execution but not exiting the runtime or preventing further async execution (build with EXIT_RUNTIME=1, if you want a true shutdown)');
     }
   } else {
 
     ABORT = true;
     EXITSTATUS = status;
-    STACKTOP = initialStackTop;
 
     exitRuntime();
 
     if (Module['onExit']) Module['onExit'](status);
   }
 
-  Module['quit'](status, new ExitStatus(status));
+  quit_(status, new ExitStatus(status));
 }
 
 var abortDecorators = [];
@@ -8750,13 +8540,9 @@ function abort(what) {
     Module['onAbort'](what);
   }
 
-  if (what !== undefined) {
-    out(what);
-    err(what);
-    what = JSON.stringify(what)
-  } else {
-    what = '';
-  }
+  what += '';
+  out(what);
+  err(what);
 
   ABORT = true;
   EXITSTATUS = 1;
@@ -8772,8 +8558,6 @@ function abort(what) {
 }
 Module['abort'] = abort;
 
-// {{PRE_RUN_ADDITIONS}}
-
 if (Module['preInit']) {
   if (typeof Module['preInit'] == 'function') Module['preInit'] = [Module['preInit']];
   while (Module['preInit'].length > 0) {
@@ -8782,11 +8566,9 @@ if (Module['preInit']) {
 }
 
 
-Module["noExitRuntime"] = true;
+  Module["noExitRuntime"] = true;
 
 run();
-
-// {{POST_RUN_ADDITIONS}}
 
 
 
