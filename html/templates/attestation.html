@@ -168,7 +168,7 @@
 
   // Unmarshal the serialized TPMS_ATTEST buffer.
   var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
-  assert(attested.rc == TPM2_RC_SUCCESS, 'Unmashal failed');
+  assert(attested.rc == TPM2_RC_SUCCESS, 'Unmarshal failed');
 
   // Extract the nonce from the tpm2b_attest buffer.
   // It should match the random challenge that we sent. This proves the attested data is fresh.

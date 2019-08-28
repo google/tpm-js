@@ -1,7 +1,7 @@
 <h2>PCRs</h2>
 
 <p>
-  Platform Configuration Registers (PCRs) are a set of fixed-sized registered in
+  Platform Configuration Registers (PCRs) are a set of fixed-sized registers in
   the TPM. Unlike regular registers, PCR values cannot be set to arbitrary values.
   The only operation they support (besides Read), is <b>Extend</b>.
 
@@ -161,7 +161,7 @@
 <h3>Reading PCR Values</h3>
 <p>
   <div class="alert alert-warning" role="alert">There's one TPM command you should definitely <b>not</b> use: <code>TPM2_CC_PCR_Read</code>.
-    <br>The reason: it returns PCR values, but we no security guarantees. An attacker
+    <br>The reason: it returns PCR values, but with no security guarantees. An attacker
     can MITM your communication with the TPM, and forge arbitrary TPM2_CC_PCR_Read
     responses.
   </div>
