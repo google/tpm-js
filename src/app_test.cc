@@ -14,6 +14,7 @@
 
 #include "app.h"
 #include "simulator.h"
+#include "util.h"
 
 #include <gtest/gtest.h>
 
@@ -471,7 +472,7 @@ TEST_F(AppTest, TestQuote) {
   EXPECT_GT(result.rsa_ssa_sig.size(), 0);
   EXPECT_GT(result.tpm2b_attest.size(), 0);
 
-  AttestInfo attest = app->UnmarshalAttestBuffer(result.tpm2b_attest);
+  AttestInfo attest = Util::UnmarshalAttestBuffer(result.tpm2b_attest);
   EXPECT_EQ(TPM2_RC_SUCCESS, attest.rc);
   EXPECT_EQ(TPM2_GENERATED_VALUE, attest.magic);
   EXPECT_EQ(TPM2_ST_ATTEST_QUOTE, attest.type);

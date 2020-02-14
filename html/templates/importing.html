@@ -1,0 +1,164 @@
+<h2>Importing Keys</h2>
+Suppose we want to send a <b>secret</b> to a remote host, and we know only its
+TPM's endorsement key. Recall that the EK is a <b>restricted</b> encryption key,
+so we cannot simply call <code>TPM2_CC_RSA_Decrypt/TPM2_CC_ECDH_Zgen</code> on
+it.
+<br>To accomplish this we <b>seal</b> the secret to a new key object, and send
+this (encrypted, authenticated) object to the TPM. On the remote host, we call
+<code>TPM2_CC_Import</code> and <code>TPM2_CC_Load</code> to unwrap and load the
+carrier key. Then we call <code>TPM2_Unseal</code> to retrieve the secret.
+
+<h3>Key Import Scheme</h3>
+<p>
+    The scheme consists of two stages. In the first stage, the sender builds a keyed-hash
+    object, and protects it with two keys (one for encryption, one for integrity)
+    derived from a randomly generated seed. The sender sends the wrapped seed encrypted
+    by the TPM's EK public key, the encrypted keyed-hash private part with its
+    hmac tag and the keyed-hash public part.
+</p>
+
+<p>
+  <img src="images/key_import.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Key Import">
+</p>
+
+<p>
+    In the second stage, the client calls <code>TPM2_CC_Import</code> with the
+    import blob computed on stage one. The TPM returns a <code>TPM2_PRIVATE</code>    blob that can be used with <code>TPM2_CC_Load</code> to load the keyed-hash
+    key object under the EK. Once loaded, <code>TPM2_CC_Unseal</code> retrieves
+    the sensitive data sealed to the carrier keyed-hash object.
+</p>
+
+<h4>Computing Import Blob</h4>
+<p>
+    Let's see this in action. First, we need to know the TPM's EK. Here, we create
+    the EK and read its public key. In real life scenarios, the EK certificate
+    should be verified as well.
+</p>
+
+<p>
+  {{ macros.code_cell(input="
+  // Create primary key endorsement key from the default template.
+  var ek = app.CreatePrimaryEndorsementKey();
+  assert(ek.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+  assert(app.FlushContext(ek.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  // Build public key object from key material.
+  var bn_n = new forge.jsbn.BigInteger(ek.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger('10001', 16);
+  ek_pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+  print('EK: ', ek_pub);
+  ")}}
+</p>
+
+<p>
+    Next, we create a keyed-hash object. We seal the secret data to this object. Note,
+    this happens on the sender side, and does not require TPM access.
+</p>
+<p>
+  {{ macros.code_cell(input="
+  var sensitive = 'super secret stuff';
+  carrier = new Module.KeyedHash(sensitive);
+  print('OK');
+  ")}}
+</p>
+
+
+<p>
+  Next, we create a random seed and derive two keys, one for encryption, one for integrity.
+</p>
+<p>
+  {{ macros.code_cell(input="
+  seed = forge.random.getBytesSync(16)
+  aes_key = util.KDFa(TPM2_ALG_SHA256, seed, 'STORAGE', carrier.GetEncodedPublicName(), [], 128)
+  mac_key = util.KDFa(TPM2_ALG_SHA256, seed, 'INTEGRITY', ByteArrayToStdVector([]), [], 256)
+  print('OK');
+  ")}}
+</p>
+
+<p>
+  Finally, we encrypt-then-mac the keyed-hash private part:
+</p>
+<p>
+  {{ macros.code_cell(input="
+
+  // Encrypt carrier keyed-hash object.
+  var cipher = forge.cipher.createCipher('AES-CFB', aes_key)
+  cipher.start({iv: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]})
+  cipher.update(ByteArrayToForgeBuffer(StdVectorToByteArray(carrier.GetEncodedPrivate())))
+  cipher.finish()
+  enc_private = cipher.output.data
+
+  // MAC encrypted blob.
+  hmac = forge.hmac.create()
+  hmac.start('sha256', mac_key)
+  hmac.update(cipher.output.data)
+  hmac.update(ByteArrayToForgeBuffer(StdVectorToByteArray(carrier.GetEncodedPublicName())).data)
+  tag = hmac.digest().data
+
+  // Encrypt seed by EK's public key.
+  enc_seed = ek_pub.encrypt(seed, 'RSA-OAEP', {md: forge.md.sha256.create(), label: 'DUPLICATE\\x00'})
+
+  print('Import blob:');
+  print('Encrypted seed: ', forge.util.bytesToHex(enc_seed));
+  print('Encrypted private: ', forge.util.bytesToHex(enc_private))
+  print('Encrypted private mac: ', forge.util.bytesToHex(tag))
+  print('Carrier public: ', forge.util.bytesToHex(ByteArrayToForgeBuffer(StdVectorToByteArray(carrier.GetEncodedPublic())).data))
+  ")}}
+</p>
+
+<h4>Loading Import Blob</h4>
+<p>
+    On the remote host, we call <code>TPM2_CC_Import</code> to import the blob.
+    Finally, we call <code>TPM2_CC_Load</code> to load the imported key under the
+    EK, and <code>TPM2_CC_Unseal</code> to retrieve the sensitive data.
+</p>
+<p>
+  {{ macros.code_cell(input="
+  // Create primary key endorsement key from the default template.
+  var ek = app.CreatePrimaryEndorsementKey();
+  assert(ek.rc == TPM2_RC_SUCCESS, 'CreatePrimary failed');
+
+  // Authorization w/ EK has to use Policy Secret sessions.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, 'StartAuthSession failed');
+
+  // Refresh session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle);
+  assert(rc == TPM2_RC_SUCCESS, 'PolicySecret failed');
+  app.SetSessionHandle(session.handle);
+
+  // Import blob.
+  var import_result = app.Import(ek.handle, carrier.GetEncodedPublic(), tag, enc_private, enc_seed)
+  assert(import_result.rc == TPM2_RC_SUCCESS, 'Import failed');
+  print('Imported TPM2B_PRIVATE: ', StdVectorToByteArray(import_result.tpm2b_private));
+
+  // Refresh session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle);
+  assert(rc == TPM2_RC_SUCCESS, 'PolicySecret failed');
+  app.SetSessionHandle(session.handle);
+
+  // Load imported keyed-hash object.
+  var loaded = app.Load(ek.handle, import_result.tpm2b_private, import_result.tpm2b_public)
+  assert(loaded.rc == TPM2_RC_SUCCESS, 'Load failed');
+
+  // Unseal sensitive data.
+  app.SetSessionHandle(TPM2_RS_PW);
+  var unsealed = app.Unseal(loaded.handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, 'Unseal failed');
+
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  print('Unsealed data: ', unsealed_data);
+  assert(_.isEqual(unsealed_data, 'super secret stuff'), 'Sensitive data does not match');
+
+  // Unload session and keys.
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(ek.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+  assert(app.FlushContext(loaded.handle) == TPM2_RC_SUCCESS, 'FlushContext failed');
+
+  print('OK');
+  ")}}
+</p>
+

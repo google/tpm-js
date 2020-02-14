@@ -995,32 +995,6 @@ QuoteResult App::Quote(uint32_t key_handle, const std::string &nonce) {
   return result;
 }
 
-AttestInfo
-App::UnmarshalAttestBuffer(const std::vector<uint8_t> &tpm2b_attest) {
-  TPMS_ATTEST attest = {};
-
-  AttestInfo result;
-  result.rc = Tss2_MU_TPMS_ATTEST_Unmarshal(
-      tpm2b_attest.data(), tpm2b_attest.size(), nullptr, &attest);
-  if (result.rc == TPM2_RC_SUCCESS) {
-    result.magic = attest.magic;
-    result.type = attest.type;
-    result.signer_qualified_name = std::vector<uint8_t>(
-        attest.qualifiedSigner.name,
-        attest.qualifiedSigner.name + attest.qualifiedSigner.size);
-    result.nonce =
-        std::vector<uint8_t>(attest.extraData.buffer,
-                             attest.extraData.buffer + attest.extraData.size);
-    if (attest.type == TPM2_ST_ATTEST_QUOTE) {
-      result.selected_pcr_digest =
-          std::vector<uint8_t>(attest.attested.quote.pcrDigest.buffer,
-                               attest.attested.quote.pcrDigest.buffer +
-                                   attest.attested.quote.pcrDigest.size);
-    }
-  }
-  return result;
-}
-
 int App::HierarchyChangeAuth(int hierarchy, const std::string &auth_string) {
   LOG1("HierarchyChangeAuth %x '%s'\n", hierarchy, auth_string.c_str());
   TPM2B_AUTH auth = {};
@@ -1145,11 +1119,79 @@ int App::PolicyPCR(uint32_t session_handle,
                             /*rspAuthsArray=*/nullptr);
 }
 
+int App::PolicySecret(uint32_t auth_handle, uint32_t session_handle) {
+  LOG1("PolicySecret %x\n", session_handle);
+  int32_t expiration = 10;
+  TPM2B_TIMEOUT timeout = {
+      .size = TPM2BStructSize<TPM2B_TIMEOUT>(),
+  };
+  TPMT_TK_AUTH ticket = {};
+  return Tss2_Sys_PolicySecret(tss_.GetSysContext(), auth_handle,
+                               session_handle, &sessions_data_,
+                               /*nonceTPM=*/nullptr, /*cpHashA=*/nullptr,
+                               /*policyRef=*/nullptr, expiration, &timeout,
+                               &ticket, &sessions_data_out_);
+}
+
 int App::DictionaryAttackLockReset() {
   LOG1("DictionaryAttackLockReset\n");
   return Tss2_Sys_DictionaryAttackLockReset(tss_.GetSysContext(),
                                             TPM2_RH_LOCKOUT, &sessions_data_,
                                             &sessions_data_out_);
 }
+
+ImportResult App::Import(uint32_t parent_handle,
+                         const std::vector<uint8_t> &public_area,
+                         const std::vector<uint8_t> &integrity_hmac,
+                         const std::vector<uint8_t> &encrypted_private,
+                         const std::vector<uint8_t> &encrypted_seed) {
+  LOG1("Import %x\n", parent_handle);
+
+  TPM2B_PUBLIC in_public = {
+      .size = TPM2BStructSize<TPM2B_PUBLIC>(),
+      .publicArea = TPM2BUnmarshal<TPMT_PUBLIC, Tss2_MU_TPMT_PUBLIC_Unmarshal>(
+          public_area),
+  };
+
+  TPM2B_DIGEST mac = {};
+  mac.size = integrity_hmac.size();
+  assert(mac.size <= sizeof(mac.buffer));
+  memcpy(mac.buffer, integrity_hmac.data(), mac.size);
+
+  TPM2B_PRIVATE in_duplicate = {};
+  size_t offset = 0;
+  TSS2_RC rc = Tss2_MU_TPM2B_DIGEST_Marshal(
+      &mac, in_duplicate.buffer, sizeof(in_duplicate.buffer), &offset);
+  assert(rc == TPM2_RC_SUCCESS);
+  in_duplicate.size += offset;
+  memcpy(in_duplicate.buffer + in_duplicate.size, encrypted_private.data(),
+         encrypted_private.size());
+  in_duplicate.size += encrypted_private.size();
+
+  TPM2B_ENCRYPTED_SECRET in_encrypted_secret = {};
+  in_encrypted_secret.size = encrypted_seed.size();
+  assert(in_encrypted_secret.size <= sizeof(in_encrypted_secret.secret));
+  memcpy(in_encrypted_secret.secret, encrypted_seed.data(),
+         in_encrypted_secret.size);
+
+  TPMT_SYM_DEF_OBJECT in_sym_alg = {.algorithm = TPM2_ALG_NULL};
+  TPM2B_PRIVATE out_private = {
+      .size = TPM2BStructSize<TPM2B_PRIVATE>(),
+  };
+
+  ImportResult result = {};
+  result.rc = Tss2_Sys_Import(tss_.GetSysContext(), parent_handle,
+                              &sessions_data_, /*encryptionKey=*/nullptr,
+                              &in_public, &in_duplicate, &in_encrypted_secret,
+                              &in_sym_alg, &out_private, &sessions_data_out_);
+  if (result.rc == TPM2_RC_SUCCESS) {
+    result.tpm2b_private =
+        TPM2BMarshal<TPM2B_PRIVATE, Tss2_MU_TPM2B_PRIVATE_Marshal>(
+            &out_private);
+    result.tpm2b_public =
+        TPM2BMarshal<TPM2B_PUBLIC, Tss2_MU_TPM2B_PUBLIC_Marshal>(&in_public);
+  }
+  return result;
+} // namespace tpm_js
 
 } // namespace tpm_js

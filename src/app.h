@@ -109,17 +109,6 @@ struct QuoteResult {
   std::vector<uint8_t> tpm2b_attest;
 };
 
-struct AttestInfo {
-  int rc;
-  // Following fields are only valid if rc == TPM2_RC_SUCCESS.
-  uint32_t magic;
-  int type;
-  std::vector<uint8_t> signer_qualified_name;
-  std::vector<uint8_t> nonce;
-  // Valid only if type == TPM2_ST_ATTEST_QUOTE.
-  std::vector<uint8_t> selected_pcr_digest;
-};
-
 struct UnsealResult {
   int rc;
   // Following fields are only valid if rc == TPM2_RC_SUCCESS.
@@ -131,6 +120,15 @@ struct StartAuthSessionResult {
   // Following fields are only valid if rc == TPM2_RC_SUCCESS.
   uint32_t handle;
   std::vector<uint8_t> nonce_tpm;
+};
+
+struct ImportResult {
+  int rc;
+  // Following fields are only valid if rc == TPM2_RC_SUCCESS.
+  // Copy of TPM2B_PRIVATE buffer. Can later be used with Load.
+  std::vector<uint8_t> tpm2b_private;
+  // Copy of TPM2B_PUBLIC buffer. Can later be used with Load.
+  std::vector<uint8_t> tpm2b_public;
 };
 
 class App {
@@ -243,9 +241,6 @@ public:
   // Calls Tss2_Sys_Quote. Signs the SHA256 digest of PCR0, PCR1, PCR2 and PCR3.
   QuoteResult Quote(uint32_t key_handle, const std::string &nonce);
 
-  // Unmarshals TPM2B_ATTEST structure from its wire representation.
-  AttestInfo UnmarshalAttestBuffer(const std::vector<uint8_t> &tpm2b_attest);
-
   // Calls Tss2_Sys_HierarchyChangeAuth.
   int HierarchyChangeAuth(int hierarchy, const std::string &auth_string);
 
@@ -269,11 +264,21 @@ public:
   int PolicyPCR(uint32_t session_handle,
                 const std::vector<uint8_t> &pcrs_digest);
 
+  // Calls Tss2_Sys_PolicySecret.
+  int PolicySecret(uint32_t auth_handle, uint32_t session_handle);
+
   // Sets handle value of sessions_data_out_.auths[0].
   void SetSessionHandle(uint32_t handle);
 
   // Calls Tss2_Sys_DictionaryAttackLockReset.
   int DictionaryAttackLockReset();
+
+  // Calls Tss2_Sys_Import.
+  ImportResult Import(uint32_t parent_handle,
+                      const std::vector<uint8_t> &public_area,
+                      const std::vector<uint8_t> &integrity_hmac,
+                      const std::vector<uint8_t> &encrypted_private,
+                      const std::vector<uint8_t> &encrypted_seed);
 
 private:
   App();

@@ -106,6 +106,8 @@ add_library(simulator_lib STATIC
   src/simulator.cc
   src/tss_adapter.cc
   src/app.cc
+  src/keyed_hash.cc
+  src/util.cc
   src/log.cc
   src/debug.cc
 )
@@ -186,6 +188,28 @@ target_link_libraries(app_test
 )
 
 add_test_target(app_test)
+
+#
+# util_test
+#
+add_executable(util_test
+  src/util_test.cc
+)
+
+target_include_directories(util_test
+  PRIVATE
+  ${_GOOGLETEST_INCLUDE_DIR}
+)
+
+target_link_libraries(util_test
+  simulator_lib
+  gmock
+  gtest
+  gtest_main
+)
+
+add_test_target(util_test)
+
 
 
 if(BUILDING_WASM)

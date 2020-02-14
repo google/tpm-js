@@ -13,7 +13,9 @@
 // limitations under the License.
 
 #include "app.h"
+#include "keyed_hash.h"
 #include "simulator.h"
+#include "util.h"
 
 #include <emscripten/bind.h>
 #include <emscripten/html5.h>
@@ -34,6 +36,8 @@ EMSCRIPTEN_BINDINGS(TPM) {
   e::function("SimGetOwnerSeed", &tpm_js::Simulator::GetOwnerSeed);
   e::function("SimGetNullSeed", &tpm_js::Simulator::GetNullSeed);
   e::function("SimGetBootCounter", &tpm_js::Simulator::GetBootCounter);
+  e::function("UtilUnmarshalAttestBuffer", &tpm_js::Util::UnmarshalAttestBuffer);
+  e::function("UtilKDFa", &tpm_js::Util::KDFa);
 
   e::class_<tpm_js::App>("App")
     .constructor(&tpm_js::App::Get, e::allow_raw_pointers())
@@ -62,7 +66,6 @@ EMSCRIPTEN_BINDINGS(TPM) {
     .function("NvReadPublic", &tpm_js::App::NvReadPublic)
     .function("NvRead", &tpm_js::App::NvRead)
     .function("Quote", &tpm_js::App::Quote)
-    .function("UnmarshalAttestBuffer", &tpm_js::App::UnmarshalAttestBuffer)
     .function("HierarchyChangeAuth", &tpm_js::App::HierarchyChangeAuth)
     .function("SetAuthPassword", &tpm_js::App::SetAuthPassword)
     .function("Unseal", &tpm_js::App::Unseal)
@@ -70,8 +73,10 @@ EMSCRIPTEN_BINDINGS(TPM) {
     .function("PolicyGetDigest", &tpm_js::App::PolicyGetDigest)
     .function("PolicyPassword", &tpm_js::App::PolicyPassword)
     .function("PolicyPCR", &tpm_js::App::PolicyPCR)
+    .function("PolicySecret", &tpm_js::App::PolicySecret)
     .function("SetSessionHandle", &tpm_js::App::SetSessionHandle)
     .function("DictionaryAttackLockReset", &tpm_js::App::DictionaryAttackLockReset)
+    .function("Import", &tpm_js::App::Import)
   ;
 
   e::value_object<tpm_js::TpmProperties>("TpmProperties")
@@ -154,6 +159,19 @@ EMSCRIPTEN_BINDINGS(TPM) {
     .field("rc", &tpm_js::StartAuthSessionResult::rc)
     .field("handle", &tpm_js::StartAuthSessionResult::handle)
     .field("nonce_tpm", &tpm_js::StartAuthSessionResult::nonce_tpm)
+  ;
+
+  e::value_object<tpm_js::ImportResult>("ImportResult")
+    .field("rc", &tpm_js::ImportResult::rc)
+    .field("tpm2b_private", &tpm_js::ImportResult::tpm2b_private)
+    .field("tpm2b_public", &tpm_js::ImportResult::tpm2b_public)
+  ;
+
+  e::class_<tpm_js::KeyedHash>("KeyedHash")
+    .constructor<const std::string&>()
+    .function("GetEncodedPrivate", &tpm_js::KeyedHash::GetEncodedPrivate)
+    .function("GetEncodedPublic", &tpm_js::KeyedHash::GetEncodedPublic)
+    .function("GetEncodedPublicName", &tpm_js::KeyedHash::GetEncodedPublicName)
   ;
 
   e::register_vector<unsigned char>("StdVectorOfBytes");

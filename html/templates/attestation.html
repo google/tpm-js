@@ -167,7 +167,7 @@
   assert(pub.verify(md.digest().bytes(), signature, 'RSASSA-PKCS1-V1_5') == true, 'Signature verification failed');
 
   // Unmarshal the serialized TPMS_ATTEST buffer.
-  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  var attested = util.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
   assert(attested.rc == TPM2_RC_SUCCESS, 'Unmarshal failed');
 
   // Extract the nonce from the tpm2b_attest buffer.

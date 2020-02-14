@@ -243,7 +243,7 @@
 
   // Unmarshal the serialized TPMS_ATTEST buffer.
   // This process does not require any TPM secrets, and can be done by the remote verifier.
-  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  var attested = util.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
   assert(attested.rc == TPM2_RC_SUCCESS, 'Unmashal failed');
 
   // Magic value indicates the quote was on internal TPM data.
