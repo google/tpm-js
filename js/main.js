@@ -15,8 +15,11 @@
 // TPM application object (src/app.cc).
 var app = {};
 
-// TPM simulator: wraps src/simulator.cc global functions.
+// TPM simulator: wraps src/simulator.cc static functions.
 var sim = {};
+
+// TPM util: wraps src/util.cc static functions.
+var util = {};
 
 // Log verbosity level.
 var logging_level = 2;
@@ -508,17 +511,6 @@ $(document).ready(function() {
             }
         }(app.Quote);
 
-        app.UnmarshalAttestBuffer = function(wrapped) {
-            return function() {
-                arguments[0] = jQuery.extend(true, {}, arguments[0]); // deep-copy tpm2b_attest.
-                arguments[0] = ByteArrayToStdVector(arguments[0]);
-                const result = wrapped.apply(this, arguments);
-                result.signer_qualified_name = StdVectorToByteArray(result.signer_qualified_name);
-                result.nonce = StdVectorToByteArray(result.nonce);
-                result.selected_pcr_digest = StdVectorToByteArray(result.selected_pcr_digest);
-                return result;
-            }
-        }(app.UnmarshalAttestBuffer);
 
         app.Unseal = function(wrapped) {
             return function() {
@@ -534,6 +526,22 @@ $(document).ready(function() {
                 return StdVectorToByteArray(result);
             }
         }(app.PolicyGetDigest);
+
+        app.Import = function(wrapped) {
+            return function() {
+                arguments[2] = jQuery.extend(true, [], arguments[2]); // deep-copy integrity_hmac.
+                arguments[2] = StringToStdVector(arguments[2]);
+                arguments[3] = jQuery.extend(true, [], arguments[3]); // deep-copy encrypted_private.
+                arguments[3] = StringToStdVector(arguments[3]);
+                arguments[4] = jQuery.extend(true, [], arguments[4]); // deep-copy encrypted_seed.
+                arguments[4] = StringToStdVector(arguments[4]);
+                const result = wrapped.apply(this, arguments);
+                // Don't change tpm2b types.
+                // result.tpm2b_private = StdVectorToByteArray(result.tpm2b_private);
+                // result.tpm2b_public = StdVectorToByteArray(result.tpm2b_public);
+                return result;
+            }
+        }(app.Import);
 
         Module.SimGetPcr = function(wrapped) {
             return function() {
@@ -570,6 +578,31 @@ $(document).ready(function() {
             }
         }(Module.SimGetNullSeed);
 
+        Module.UtilUnmarshalAttestBuffer = function(wrapped) {
+            return function() {
+                arguments[0] = jQuery.extend(true, {}, arguments[0]); // deep-copy tpm2b_attest.
+                arguments[0] = ByteArrayToStdVector(arguments[0]);
+                const result = wrapped.apply(this, arguments);
+                result.signer_qualified_name = StdVectorToByteArray(result.signer_qualified_name);
+                result.nonce = StdVectorToByteArray(result.nonce);
+                result.selected_pcr_digest = StdVectorToByteArray(result.selected_pcr_digest);
+                return result;
+            }
+        }(Module.UtilUnmarshalAttestBuffer);
+
+        Module.UtilKDFa = function(wrapped) {
+            return function() {
+                arguments[1] = jQuery.extend(true, [], arguments[1]); // deep-copy key.
+                arguments[1] = StringToStdVector(arguments[1]);
+                //arguments[3] = jQuery.extend(true, [], arguments[3]); // deep-copy context_u.
+                //arguments[3] = StringToStdVector(arguments[3]);
+                arguments[4] = jQuery.extend(true, [], arguments[4]); // deep-copy context_v.
+                arguments[4] = StringToStdVector(arguments[4]);
+                const result = wrapped.apply(this, arguments);
+                return StdVectorToByteArray(result);
+            }
+        }(Module.UtilKDFa);
+
         // Automatically refresh simulator window after Startup.
         // This simplifies our code snippets.
         app.Startup = function(wrapped) {
@@ -595,6 +628,14 @@ $(document).ready(function() {
         for (var name in Module) {
             if (name.startsWith("Sim")) {
                 sim[name.substring(3)] = Module[name];
+            }
+        }
+
+        // Copy util functions to util object for easier access.
+        // util.XXXX = Module.UtilXXXX
+        for (var name in Module) {
+            if (name.startsWith("Util")) {
+                util[name.substring(4)] = Module[name];
             }
         }
 

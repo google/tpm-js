@@ -50,7 +50,7 @@
   <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/bn.js" integrity="sha256-3sG2Ebk/cRSft/ho8BwOMhz7F6v93VWHfmSWlLWlTCA=" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/sha256.js" integrity="sha256-wT4mQyiVx0+K4Zf04YESH4U2O5OooLOp4aCYlpeQxEI=" crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/sjcl@1.0.7/core/ecc.js" integrity="sha256-zClRcOVvsyJAAC/TZ7juVln1hrTicUl3HnOH6xKiUWk=" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/node-forge@0.7.5/dist/forge.all.min.js" integrity="sha256-tTxeWljNYMd8KHKLWEb7dGkjyjLd33mo23ecfm8nckM=" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/node-forge@0.9.1/dist/forge.all.min.js" integrity="sha256-V9vvZ2rmZzuhI0DaxeHuvh1c2mt4cdFUFQJBeVpUAIo=" crossorigin="anonymous"></script>
 
 
   <script>
@@ -114,6 +114,9 @@
                     <li id="side_pg_sealing" >
             <a href="#pg_sealing" data-value="pg_sealing">Sealing</a>
           </li>
+                    <li id="side_pg_importing" >
+            <a href="#pg_importing" data-value="pg_importing">Importing</a>
+          </li>
                     <li id="side_pg_glossary" >
             <a href="#pg_glossary" data-value="pg_glossary">Glossary</a>
           </li>
@@ -156,6 +159,9 @@
   In this site we'll learn how TPMs work. We'll see how to use the TPM as a cryptographic
   device. We'll cover topics such as key generation, measured boot, PCRs, remote
   attestation and key sealing.
+</p>
+<p>
+    The code for this website can be found at <a href="https://github.com/google/tpm-js">github.com/google/tpm-js</a>.
 </p>
           <nav>
             <ul class="pager">
@@ -2243,7 +2249,7 @@
 
   // Unmarshal the serialized TPMS_ATTEST buffer.
   // This process does not require any TPM secrets, and can be done by the remote verifier.
-  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  var attested = util.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
   assert(attested.rc == TPM2_RC_SUCCESS, &#39;Unmashal failed&#39;);
 
   // Magic value indicates the quote was on internal TPM data.
@@ -2470,7 +2476,7 @@
   assert(pub.verify(md.digest().bytes(), signature, &#39;RSASSA-PKCS1-V1_5&#39;) == true, &#39;Signature verification failed&#39;);
 
   // Unmarshal the serialized TPMS_ATTEST buffer.
-  var attested = app.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
+  var attested = util.UnmarshalAttestBuffer(quote_result.tpm2b_attest);
   assert(attested.rc == TPM2_RC_SUCCESS, &#39;Unmarshal failed&#39;);
 
   // Extract the nonce from the tpm2b_attest buffer.
@@ -3479,6 +3485,309 @@ Policy session with bad (unexpected) PCR values:
 </p>          <nav>
             <ul class="pager">
                             <li><a href="#pg_authorization" data-value="pg_authorization">Previous</a></li>
+                             <li><a href="#pg_importing" data-value="pg_importing">Next</a></li>
+                          </ul>
+          </nav>
+        </div>
+                <div id=pg_importing
+             class="page"
+              style="display: none;">
+          <h2>Importing Keys</h2>
+Suppose we want to send a <b>secret</b> to a remote host, and we know only its
+TPM's endorsement key. Recall that the EK is a <b>restricted</b> encryption key,
+so we cannot simply call <code>TPM2_CC_RSA_Decrypt/TPM2_CC_ECDH_Zgen</code> on
+it.
+<br>To accomplish this we <b>seal</b> the secret to a new key object, and send
+this (encrypted, authenticated) object to the TPM. On the remote host, we call
+<code>TPM2_CC_Import</code> and <code>TPM2_CC_Load</code> to unwrap and load the
+carrier key. Then we call <code>TPM2_Unseal</code> to retrieve the secret.
+
+<h3>Key Import Scheme</h3>
+<p>
+    The scheme consists of two stages. In the first stage, the sender builds a keyed-hash
+    object, and protects it with two keys (one for encryption, one for integrity)
+    derived from a randomly generated seed. The sender sends the wrapped seed encrypted
+    by the TPM's EK public key, the encrypted keyed-hash private part with its
+    hmac tag and the keyed-hash public part.
+</p>
+
+<p>
+  <img src="images/key_import.svg" class="img-responsive center-block" style="max-width:70%"
+    alt="Key Import">
+</p>
+
+<p>
+    In the second stage, the client calls <code>TPM2_CC_Import</code> with the
+    import blob computed on stage one. The TPM returns a <code>TPM2_PRIVATE</code>    blob that can be used with <code>TPM2_CC_Load</code> to load the keyed-hash
+    key object under the EK. Once loaded, <code>TPM2_CC_Unseal</code> retrieves
+    the sensitive data sealed to the carrier keyed-hash object.
+</p>
+
+<h4>Computing Import Blob</h4>
+<p>
+    Let's see this in action. First, we need to know the TPM's EK. Here, we create
+    the EK and read its public key. In real life scenarios, the EK certificate
+    should be verified as well.
+</p>
+
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key endorsement key from the default template.
+  var ek = app.CreatePrimaryEndorsementKey();
+  assert(ek.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+  assert(app.FlushContext(ek.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  // Build public key object from key material.
+  var bn_n = new forge.jsbn.BigInteger(ek.rsa_public_n.substr(2), 16);
+  var bn_e = new forge.jsbn.BigInteger(&#39;10001&#39;, 16);
+  ek_pub = new forge.pki.setRsaPublicKey(bn_n, bn_e);
+  print(&#39;EK: &#39;, ek_pub);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+    Next, we create a keyed-hash object. We seal the secret data to this object. Note,
+    this happens on the sender side, and does not require TPM access.
+</p>
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  var sensitive = &#39;super secret stuff&#39;;
+  carrier = new Module.KeyedHash(sensitive);
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+
+<p>
+  Next, we create a random seed and derive two keys, one for encryption, one for integrity.
+</p>
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  seed = forge.random.getBytesSync(16)
+  aes_key = util.KDFa(TPM2_ALG_SHA256, seed, &#39;STORAGE&#39;, carrier.GetEncodedPublicName(), [], 128)
+  mac_key = util.KDFa(TPM2_ALG_SHA256, seed, &#39;INTEGRITY&#39;, ByteArrayToStdVector([]), [], 256)
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<p>
+  Finally, we encrypt-then-mac the keyed-hash private part:
+</p>
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+
+  // Encrypt carrier keyed-hash object.
+  var cipher = forge.cipher.createCipher(&#39;AES-CFB&#39;, aes_key)
+  cipher.start({iv: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]})
+  cipher.update(ByteArrayToForgeBuffer(StdVectorToByteArray(carrier.GetEncodedPrivate())))
+  cipher.finish()
+  enc_private = cipher.output.data
+
+  // MAC encrypted blob.
+  hmac = forge.hmac.create()
+  hmac.start(&#39;sha256&#39;, mac_key)
+  hmac.update(cipher.output.data)
+  hmac.update(ByteArrayToForgeBuffer(StdVectorToByteArray(carrier.GetEncodedPublicName())).data)
+  tag = hmac.digest().data
+
+  // Encrypt seed by EK&#39;s public key.
+  enc_seed = ek_pub.encrypt(seed, &#39;RSA-OAEP&#39;, {md: forge.md.sha256.create(), label: &#39;DUPLICATE\x00&#39;})
+
+  print(&#39;Import blob:&#39;);
+  print(&#39;Encrypted seed: &#39;, forge.util.bytesToHex(enc_seed));
+  print(&#39;Encrypted private: &#39;, forge.util.bytesToHex(enc_private))
+  print(&#39;Encrypted private mac: &#39;, forge.util.bytesToHex(tag))
+  print(&#39;Carrier public: &#39;, forge.util.bytesToHex(ByteArrayToForgeBuffer(StdVectorToByteArray(carrier.GetEncodedPublic())).data))
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+
+<h4>Loading Import Blob</h4>
+<p>
+    On the remote host, we call <code>TPM2_CC_Import</code> to import the blob.
+    Finally, we call <code>TPM2_CC_Load</code> to load the imported key under the
+    EK, and <code>TPM2_CC_Unseal</code> to retrieve the sensitive data.
+</p>
+<p>
+  <div class="code_cell clearfix">
+  <div class="row">
+    <div class="col-md-1">
+      <div>In:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="input prettyprint">
+  // Create primary key endorsement key from the default template.
+  var ek = app.CreatePrimaryEndorsementKey();
+  assert(ek.rc == TPM2_RC_SUCCESS, &#39;CreatePrimary failed&#39;);
+
+  // Authorization w/ EK has to use Policy Secret sessions.
+  var session = app.StartAuthSession(/*trial=*/false);
+  assert(session.rc == TPM2_RC_SUCCESS, &#39;StartAuthSession failed&#39;);
+
+  // Refresh session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle);
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicySecret failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Import blob.
+  var import_result = app.Import(ek.handle, carrier.GetEncodedPublic(), tag, enc_private, enc_seed)
+  assert(import_result.rc == TPM2_RC_SUCCESS, &#39;Import failed&#39;);
+  print(&#39;Imported TPM2B_PRIVATE: &#39;, StdVectorToByteArray(import_result.tpm2b_private));
+
+  // Refresh session.
+  app.SetSessionHandle(TPM2_RS_PW);
+  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle);
+  assert(rc == TPM2_RC_SUCCESS, &#39;PolicySecret failed&#39;);
+  app.SetSessionHandle(session.handle);
+
+  // Load imported keyed-hash object.
+  var loaded = app.Load(ek.handle, import_result.tpm2b_private, import_result.tpm2b_public)
+  assert(loaded.rc == TPM2_RC_SUCCESS, &#39;Load failed&#39;);
+
+  // Unseal sensitive data.
+  app.SetSessionHandle(TPM2_RS_PW);
+  var unsealed = app.Unseal(loaded.handle);
+  assert(unsealed.rc == TPM2_RC_SUCCESS, &#39;Unseal failed&#39;);
+
+  var unsealed_data = ByteArrayToForgeBuffer(unsealed.sensitive_data).data;
+  print(&#39;Unsealed data: &#39;, unsealed_data);
+  assert(_.isEqual(unsealed_data, &#39;super secret stuff&#39;), &#39;Sensitive data does not match&#39;);
+
+  // Unload session and keys.
+  assert(app.FlushContext(session.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(ek.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+  assert(app.FlushContext(loaded.handle) == TPM2_RC_SUCCESS, &#39;FlushContext failed&#39;);
+
+  print(&#39;OK&#39;);
+  </pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-1">
+      <div>Out:</div>
+    </div>
+    <div class="col-md-11">
+      <div>
+        <pre class="output prettyprint"></pre>
+      </div>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col-md-12">
+      <button type="button" class="run btn btn-primary btn-sm pull-right">Run</button>
+    </div>
+  </div>
+</div>
+</p>
+          <nav>
+            <ul class="pager">
+                            <li><a href="#pg_sealing" data-value="pg_sealing">Previous</a></li>
                              <li><a href="#pg_glossary" data-value="pg_glossary">Next</a></li>
                           </ul>
           </nav>
@@ -3535,7 +3844,7 @@ Policy session with bad (unexpected) PCR values:
     serializes commands buffers and unserializes response buffers.</dd>
 </dl>          <nav>
             <ul class="pager">
-                            <li><a href="#pg_sealing" data-value="pg_sealing">Previous</a></li>
+                            <li><a href="#pg_importing" data-value="pg_importing">Previous</a></li>
                              <li><a href="#pg_reading" data-value="pg_reading">Next</a></li>
                           </ul>
           </nav>
