@@ -53,7 +53,7 @@ Build TPM-JS:
 ```shell
 mkdir bulid-web
 cd build-web
-emconfigure cmake ..
+emcmake cmake ..
 make -j4
 ```
 
@@ -61,6 +61,20 @@ Run unit-tests:
 
 ```shell
 make check
+```
+
+Alternatively, you can build the project using the provided Docker file.
+
+One time initialization:
+
+```shell
+./dcmake.sh
+```
+
+Then build using:
+
+```shell
+./dmake.sh -j4
 ```
 
 ## Serve Files
