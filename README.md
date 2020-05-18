@@ -68,6 +68,7 @@ Alternatively, you can build the project using the provided Docker file.
 One time initialization:
 
 ```shell
+./dinit.sh
 ./dcmake.sh
 ```
 
