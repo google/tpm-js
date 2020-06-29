@@ -125,7 +125,7 @@ carrier key. Then we call <code>TPM2_Unseal</code> to retrieve the secret.
 
   // Refresh session.
   app.SetSessionHandle(TPM2_RS_PW);
-  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle);
+  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle, /*expiration=*/0);
   assert(rc == TPM2_RC_SUCCESS, 'PolicySecret failed');
   app.SetSessionHandle(session.handle);
 
@@ -136,7 +136,7 @@ carrier key. Then we call <code>TPM2_Unseal</code> to retrieve the secret.
 
   // Refresh session.
   app.SetSessionHandle(TPM2_RS_PW);
-  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle);
+  var rc = app.PolicySecret(TPM2_RH_ENDORSEMENT, session.handle, /*expiration=*/0);
   assert(rc == TPM2_RC_SUCCESS, 'PolicySecret failed');
   app.SetSessionHandle(session.handle);
 

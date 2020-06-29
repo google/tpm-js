@@ -1119,9 +1119,9 @@ int App::PolicyPCR(uint32_t session_handle,
                             /*rspAuthsArray=*/nullptr);
 }
 
-int App::PolicySecret(uint32_t auth_handle, uint32_t session_handle) {
+int App::PolicySecret(uint32_t auth_handle, uint32_t session_handle,
+                      int32_t expiration) {
   LOG1("PolicySecret %x\n", session_handle);
-  int32_t expiration = 10;
   TPM2B_TIMEOUT timeout = {
       .size = TPM2BStructSize<TPM2B_TIMEOUT>(),
   };

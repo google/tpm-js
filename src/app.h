@@ -265,7 +265,8 @@ public:
                 const std::vector<uint8_t> &pcrs_digest);
 
   // Calls Tss2_Sys_PolicySecret.
-  int PolicySecret(uint32_t auth_handle, uint32_t session_handle);
+  int PolicySecret(uint32_t auth_handle, uint32_t session_handle,
+                   int32_t expiration);
 
   // Sets handle value of sessions_data_out_.auths[0].
   void SetSessionHandle(uint32_t handle);
